@@ -48,7 +48,7 @@ namespace App.Network
         {
             try
             {
-                SteamClient.Init(4696600, true);
+                SteamClient.Init(480, true);
 
                 if (SteamClient.IsValid)
                 {
