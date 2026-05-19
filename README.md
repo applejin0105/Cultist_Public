@@ -10,8 +10,8 @@
 
 게임 **Cultist**는 고대 지중해와 중동의 종교적, 인류학적 역사를 배경으로 하는 3인 멀티플레이 전략 카드 게임입니다. 플레이어는 정형화된 덱 기반 전투를 넘어, 카드들이 마치 뿌리처럼 뻗어나가며 자유롭게 분기하는 트리 구조(Tree Structure) 형태의 유기적인 필드 시스템을 통해 자신만의 교리와 세력을 확장해 나갑니다. 이 치열한 수싸움 속에서 시간의 시련을 견디는 거대한 종교로 거듭날 수도, 역사의 뒤안길로 사라진 유물 속 흔적으로 남을 수도 있습니다.
 
-[![Steam](https://img.shields.io/badge/Steam-000000?style=for-the-badge&logo=steam&logoColor=white)]([https://store.steampowered.com/app/4696600])
-[![YouTube](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)]([[여기에_유튜브_영상_링크_입력](https://www.youtube.com/watch?v=ZR8SCa53bXo)])
+[![Steam](https://img.shields.io/badge/Steam-000000?style=for-the-badge&logo=steam&logoColor=white)](https://store.steampowered.com/app/4696600)
+[![YouTube](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=ZR8SCa53bXo)
 
 ### 개발 환경 및 기술 스택 그리고 개발 관점
 
