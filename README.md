@@ -156,7 +156,7 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 1. 계층 스택 (정적 구조)
 > 네트워크 코드는 6개의 계층으로 쌓여 있고, 각 계층은 바로 아래만 알기에 Transport 계층만 교체하면 통신 방식 전체가 변경됩니다.
 
-<img width="1240" height="4045" alt="계층 스택" src="https://github.com/user-attachments/assets/846795ef-1916-4b80-99cb-d1ab06a20f84" />
+<img width="1240" height="4045" alt="계층 스택" src="https://github.com/user-attachments/assets/641f54ef-276b-42d1-be03-32d8b957515c" />
 
 코드의 정적 구조에 대해 먼저 설명하겠습니다. 앞서 설명한 Mirror와 Facepunch의 연장선입니다. 위로 갈수록 게임에 가깝고(고수준, Mirror), 아래로 갈수록 하드웨어에 가깝습니다.(저수준, Transport). 게임 코드는 Mirror만, Mirror는 `Transport` 추상 타입까지만, `FizzyFacepunch`는 `Facepunch.Steamworks`까지만 알고 그 아래는 알지 못합니다. 이러한 분리를 통해 `Transport` 자리에 무엇을 꽂느냐에 따라 통신 방식이 결정됩니다.
 
@@ -165,7 +165,7 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 2. 연결 수립 흐름 (게임 시작 전)
 > 물리적으로 떨어진 PC들이 Steam에서 인증·로비를 거쳐, SteamID를 주소 삼아 P2P로 하나의 네트워크 세션에 묶습니다.
 
-<img width="5892" height="5360" alt="2  Game Networking-2026-05-1 연결 수립 흐름9-112013" src="https://github.com/user-attachments/assets/44367a11-8483-49e9-8623-87cd37131887" />
+<img width="5697" height="5360" alt="2  Game Networking-2026-05-1 연결 수립 흐름9-112013" src="https://github.com/user-attachments/assets/833df760-405f-47a4-a567-9589d50722ba" />
 
 각 PC는 독립적으로 부팅하여 `SteamClient.Init`으로 Steam에 인증하고 각자의 SteamID를 얻습니다. 이후 모든 연결의 *주소*는 **IP가 아닌 SteamID**로 설정됩니다. 호스트는 `SteamMatchmaking.CreateLobbyAsync(3)`로 로비를 만들고, `StartHost()`로 Mirror를 호스트모드(서버+플레이어 겸임)로 띄웁니다. `GameNetworkManager`의 `OnStartServer()`가 `NetworkGameController`를 스폰하고, 스폰된 NetworkGameController 자신의 OnStartServer()가 InitializeServerLogic()을 호출해 서버에만 존재할 게임의 실질적 두뇌(`GameState`·시스템·이펙트 등록)를 생성합니다. 클라이언트는 친구창에서 참가 시 `OnLobbyEntered`에서 `networkAddress`에 호스트 SteamID를 넣고 `StartClient()`를 호출하며, Transport가 이를 SteamID로 해석해 Steam P2P가 NAT을 뚫거나 Relay로 우회해 연결을 성사시킵니다. 연결되면 `OnServerAddPlayer()`가 플레이어 프리팹(`GamePlayer` + `LobbyPlayerState`)을 스폰하고, 이 객체가 양쪽 PC에 복제되며 연결된 PC들이 하나의 세션으로 구성됩니다.
 
@@ -174,7 +174,7 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 3. 로비 → 인게임 세션 셋업
 > 모든 플레이가(호스트 제외) 준비가 끝나면 서버 주도로 인게임 씬으로 전환하고, 덱 제출·좌석 배정을 거쳐 게임 로직이 초기화됩니다.
 
-<img width="4662" height="3770" alt="3  로비에서 인게임 세션 셋업" src="https://github.com/user-attachments/assets/ae4ba9b8-8a17-4075-818e-ff85f3d4fa3b" />
+<img width="4662" height="3770" alt="3  로비에서 인게임 세션 셋업" src="https://github.com/user-attachments/assets/c133682d-9143-4240-a5b9-1363428c727a" />
 
 로비에서 각 플레이어는 `CmdSetReady(true)`로 준비 상태를 알리고 그 값은 `SyncVar`로 공유됩니다. 호스트를 제외한 전원이 준비 되었다면, 그리고 호스트가 Start 버튼을 눌렀다면 서버가 `ServerChangeScene("05_InGame")`으로 모든 클라이언트를 동시에 인게임 씬으로 전환합니다. **이때 씬 전환은 서버가 주도합니다!!!** 인게임 진입 후, 각 클라이언트들은 `CmdSubmitDeckData()`로 덱을 제출하고, 서버는 이때 `RegisterPlayer()`로 좌석 번호를 배정하며(`SyncVar`) 덱을 저장합니다. 서버는 `WaitForPlayersToStartGame` 코루틴으로 모든 덱이 도착할 때까지 기다린 뒤 `StartGameLogic()`을 실행해 `ServerGameState`를 초기화하고, 카드 상태(`SyncFullGameState`)와 UI 초기화(`RpcInitializeGameUI`)를 전원에 전파한 다음 루트 카드를 공개하고 첫 턴을 시작합니다.
 
@@ -183,11 +183,11 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 
 게임 진행 중의 모든 통신은 성격이 다른 두 메커니즘 중 하나에 속하여 진행됩니다. 편의상 메커니즘 A와 메커니즘 B로 부르겠습니다.
 
-<img width="6472" height="4110" alt="4-1  통신 메커니즘" src="https://github.com/user-attachments/assets/60b5b966-8ab3-4217-b23f-bea5b86ec1f9" />
+<img width="6472" height="4110" alt="4-1  통신 메커니즘" src="https://github.com/user-attachments/assets/116f2e25-3198-47c0-a1ea-9265ef15a950" />
 
 메커니즘 A; 상태 동기화: `SyncVar`·`SyncList`는 변수·리스트를 **감시**하는 장치입니다. 서버가 `CurrentRound`나 `SyncCards`의 값이 바뀌면 Mirror가 자동으로 dirty 처리해 전파합니다. 함수 호출이 아닌, 값의 변화 자체가 통신이라 **수동적이고, 언제나 서버->전체 단방향**으로 이루어집니다. 클라이언트에서는 hook과 Callback이 발화해 화면을 갱신합니다.
 
-<img width="1693" height="2940" alt="4-2  게임 진행 순환" src="https://github.com/user-attachments/assets/f6eb5d9d-c741-4ca6-92ff-5d04fcbc9c13" />
+<img width="1693" height="2940" alt="4-2  게임 진행 순환" src="https://github.com/user-attachments/assets/aabbabf0-010d-4459-936b-090e57356ad4" />
 
 메커니즘 B; 원격 호출(RPC): 원격 컴퓨터의 함수를 실제로 실행하는 능동적 통신이며 방향에 따라 셋으로 나뉩니다.
   B-1 | `Command`: 클라이언트 -> 서버, 행동 요청
@@ -199,7 +199,7 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 5. 비동기 입력 브릿지
 > TaskCompletionSource로 RPC 왕복을 await 한 줄로 바꿔, 서버 이펙트가 플레이어 입력을 기다렸다가 정확히 그 지점에서 재개합니다.
 
-<img width="7232" height="3760" alt="5  비동기 입력 브릿지" src="https://github.com/user-attachments/assets/f3c1d00f-7547-4266-9267-f136ba2daec4" />
+<img width="7232" height="3760" alt="5  비동기 입력 브릿지" src="https://github.com/user-attachments/assets/b83e708e-fb3d-4d21-b678-a23d8ed4ace7" />
 
 서버의 카드 효과 실행기(`EffectRunner`)는 `async/await`로 한 줄씩 진행됩니다. 이는, 카드 효과 중 '파괴/희생할 카드를 선택'과 같이 플레이어가 *타겟*을 골라야 계속 진행되는 지점이 있기 때문입니다. 당연히 해당 플레이어는 다른 PC에 존재하고, 응답 시점을 알 수 없으므로 서버 로직은 **해당 플레이어의 입력이 올 때 까지 멈췄다가 응답이 오면 재개해야 합니다.**
 
@@ -214,6 +214,6 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 6. 게임종료
 > 승패 판정 결과를 SyncVar 두 개로 전원에 전파하고, 서버 주도로 로비에 복귀합니다.
 
-<img width="3855" height="2750" alt="6  게임 종료" src="https://github.com/user-attachments/assets/16c81508-270b-48c5-be8a-93a21a94d10b" />
+<img width="3855" height="2750" alt="6  게임 종료" src="https://github.com/user-attachments/assets/275c5288-4fdf-4600-a01f-fcf5f0038d9b" />
 
 서버의 `GameRuleSystem`은 게임의 상태가 바뀔 때마다 승리조건을 판정합니다. 조건이 충족되면 `TriggerGameEnd(winnerSeat)`가 호출되고, 여기서 종료 전파를 `SyncVar` 두 개(`WinnerSeat`·`IsGameEnded`)로 처리합니다. 서버가 이 값을 설정하면 Mirror가 모든 플레이어에게 자동으로 전파하고, 각 클라이언트의 `OnGameEndedHook()`이 발화해 게임 종료 UI와 승/패 사운드를 재생합니다. 마지막으로 서버는 5초 후 `ServerChangeScene("03_Lobby")`로 전원을 로비로 되돌립니다.
