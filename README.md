@@ -791,7 +791,7 @@ NetworkGameController.InitializeServerLogic()
             └─ 플레이어 덱 JSON 파싱 → 병합
 ```
 
-*DeckSystem은 인게임 진입 시점의 진입점, DeckRepository는 덱 편집 UI의 진입점.*으로 구분하였습니다.
+*DeckSystem은 인게임 진입 시점의 진입점, DeckRepository는 덱 편집 UI의 진입점*으로 구분하였습니다.
 
 여기에서 한가지 과거의 잔재가 있습니다.
 ```csharp
