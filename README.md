@@ -806,3 +806,58 @@ var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
 즉, `DeckSystem.CreateDeckState`는 실제 멀티플레이 흐름에서 우회됩니다. `DeckSystem`이 완전히 쓸모없는 건 아니지만, 현 구조에서 `CreateDeckState`는 사실상 사용처를 잃은 상태입니다.
 
 이게 사실, 원래는 덱을 생성 -> 서버에 덱을 보내고 -> 서버에서 이 덱이 올바른 덱인지 검토 -> 게임 플레이가 순서였습니다. 그런데 앞서 `DeckRepository`를 설계하면서 *굳이?*가 되었습니다. 덱 생성이야 자체에서 판단 가능하고, 서버에서는 이미 '검증된 덱'을 받아와서 ID만 보고 `InstanceId` 일괄 발급해서 관리하면 되는데, 서버에 부담을 굳이 주어야 하나 싶어서 그냥 과감하게 사용하지 않았습니다. 결국 DeckSystem.CreateDeckState는 사용처가 줄었고, 지금은 전혀 사용하지 않고 있습니다. 추후 이 부분을 삭제하고 정리할 예정입니다!!
+
+#### Chapter 3. 턴·페이즈 상태 머신
+> 턴 진행, 페이즈 전환 제어
+
+##### [`TurnSystem.cs`](./Scripts/Systems/TurnSystem.cs)
+> 턴 순서 결정·턴 시작/종료·추가 사이클 처리
+
+플레이어의 순서를 결정하고, 턴 시작과 종료 그리고 추가 사이클을 처리합니다.
+앞선 `GameActionSystem`와 마찬가지로, 우선 `GameRuleSystem` 상태를 저장하고, 턴이 시작되거나 종료되는 타이밍에 `CheckGameRules`을 점검하여 게임이 '언제 어디서든 조건에 맞으면 바로 종료' 될 수 있게 설계했습니다.
+
+[턴 시작]
+- `StartTurn()`: 턴 시작 시, 우선 기본 사이클 횟수를 설정합니다. 기본적으로는 1회(카드 가져오기 1번!)지만, 카드 효과를 통해 얻은 `BonusTurnCycles`이 존재한다면 이 횟수만큼 반복합니다.
+
+[턴 사이클 관리]
+- `StartNewCycle()`: 새로운 사이클을 시작합니다. 반드시 `Draw.StandBy`로 시작해서 흐름을 잡습니다. 물론, 교역을 하게 강제하거나, Draw를 강제할 수 있지만 우선 시작 지점인 `Draw.StandBy`로 설정합니다.
+- `ForceEndCurrentTurn()`: 플레이어가 탈락했다면 자비없이 무관용의 원칙으로 칵! 턴을 넘겨버립니다.
+- `EndCurrentPlayerTurn()`: 현재 플레이어의 턴을 종료합니다. 이때, '강제'가 아닌 일반 종료로 처리합니다.
+- `EndCurrentPlayerTurnInternal()`: 현재 플레이어의 턴을 종료하는 메인 로직입니다. 턴을 종료하기 위해서는 다음 조건을 만족해야합니다.
+  - 패에 카드가 하나도 없을 것
+  - 사이클을 모두 마쳤을 것 -> 만약 사이클이 남아있다면 Phase를 `Draw.StandBy`로 초기화
+  그러면 진짜로 턴을 종료하며 `PhaseState.StandBy`로 페이즈를 바꾸고, 다음 플레이어를 탐색합니다. (아직 살아있는 플레이어만 탐색합니다!) 이때, 원형 순회 방식을 사용합니다. 총 4명이면 0 -> 1 -> 2 -> 3 -> 0 형식으로 진행하며, `(nextIndex + 1) % totalPlayers`를 이용했습니다. 만약에 모든 플레이어가 사망 상태라면 `do...while`이 무한하게 돌게 되므로, 이를 막기 위해 `loopCount > totalPlayers` 조건으로 총인원수만큼만 탐색하고 강제로 루프를 빠져나옵니다.
+  그렇게 빠져나오면, `nextIndex <= oldIndex` 조건문을 통해 라운드가 한 바퀴 돌았는지 판단합니다.
+    - 정상적인 턴 진행: 인덱스는 항상 증가합니다 (예: `old=1` -> `next=2`). 이 경우 `else`문을 타서 다음 플레이어의 턴을 시작합니다.
+    - 라운드 종료: 인덱스가 배열 끝에서 처음으로 돌아갔을 때(가령 `old=3 -> next=0`) 혹은 자신밖에 안 남았을 때(`old=1 -> next=1`), 새 인덱스가 이전 인덱스보다 작거나 같아집니다. 이때는 한 라운드가 끝났음을 의미하므로 `StartNewRound()`를 호출해 턴 순서를 재계산하고 다음 라운드로 넘어갑니다.
+
+[드로우 로직 제어]
+- `ProcessDrawFlow`: 드로우의 전체적인 흐름을 제어합니다. 플레이어의 DrawRule을 검사하고, 해당 DrawRule을 실질적으로 처리해줍니다. 이때, 덱에 카드가 없다면 두 가지 선택지가 주어집니다. 교역을 하거나, 사기사 카드를 뽑는 것입니다. (물론 교역소에 카드가 없으면 당연히 사기사를 뽑는데, 이는 아래 `PerformDrawOrTradeChoice`에서 처리합니다.) 이 과정에서 Draw, Trade 혹은 카드 효과로 Hand에 카드가 주어져있어서 DrawRule에 의한 카드 가져오기 단계가 끝났다면 `_phaseSystem.AdvancePhase();`를 통해 Main Phase를 Play로 변경합니다.
+- `PerformDrawOrTradeChoice`: `ProcessDrawFlow`에서는 기본적으로, '카드 가져오기 단계를 생략하고'라는 효과를 가진 카드로 인해 `DrawRule`의 `SkipSelection = false`가 아니라면, 그리고 교역소에 카드가 0장이 아니라면 Draw를 할건지 Trade를 할건지 플레이어의 선택을 기다립니다.(`var action = await _playerInputProvider.SelectDrawPhaseAsync(activePlayer.Id, canDraw, canTrade);`)' 서버는 이 입력을 바탕으로, 서버로부터 '나 이거 할래!' 요청을 보내고, 카드를 Hand로 가져오게 됩니다.
+- `PlayerRequestedAdvancePhase`: 드로우 로직을 끝내고, Play까지 마쳤다면(카드 공개하기는 선택 효과이므로 해도 되고 안해도 됩니다.) 플레이어는 Play 단계를 마치고 사이클 마감을 요청하게됩니다.
+
+[플레이어 순서 제어]
+게임은 기본적으로 Inf -> Str 이 높은 순서로 플레이어의 차례를 결정합니다. 만약 정말 개쩌는 우연의 일치로 이 둘이 같다면? 이전 턴의 순서를 유지합니다.
+
+##### [`PhaseSystem.cs`](./Scripts/Systems/PhaseSystem.cs)
+> 페이즈 전환 상태 머신(`OnPhaseChanged` 이벤트 발행)
+
+페이즈를 실질적으로 교체하고, 사용하는 시스템입니다. 특히, **각 시스템이 변경될 때 이벤트를 발행**하여 이를 `NetworkGameController`에서 감지하고, 서버에서 플레이어의 상태를 갱신하는데 사용합니다.
+
+- `GetStandardNextPhase`: DrawRule에 의한 아무런 외부 간섭(스킵 등)이 없을 때 사이클이 어떻게 흘러가야 하는지 기본 뼈대(규칙)를 정의합니다. 현재 상태를 입력하면 다음 상태를 반환합니다.
+  - `StandBy` -> `Draw.StandBy`: 사이클이 시작되면 가장 먼저 '드로우/교역 선택 대기' 상태로 전환
+  - `Draw.StandBy` -> `Draw.Draw`: 대기 상태에서 기본적으로 향하는 곳은 일반 드로우(Draw.Draw) (만약 플레이어가 교역을 선택했다면 PhaseSystem.ChangePhase()를 통해 외부에서 강제로 `Draw.Trade로 상태를 전환)
+  - `Draw.Draw` or` Draw.Trade` -> `Play.Play`: 카드를 뽑았든(`Draw`) 교환했든(`Trade`), 카드를 얻는 행동이 끝나면 무조건 카드를 내는 메인 단계(`Play.Play`)로 진입
+  - `Play.Play` -> `StandBy`: 메인 플레이가 끝나면 한 사이클이 종료된 것이므로 다시 StandBy 상태로 전환
+
+- `CalculateNextPhase`: DrawRule에 의한 예외를 처리합니다. `GetStandardNextPhase`가 알려준 기본 이정표를 바탕으로, 현재 예약된 스킵(`Skip`) 상태를 확인하여 최종 페이즈를 계산합니다. 작동 방식은 다음과 같습니다.
+  1. 목표 설정: 먼저 GetStandardNextPhase를 호출해 가야 할 기본 다음 페이즈(nextCandidate)를 알아냅니다.
+  2. 스킵 확인 (while 루프): 만약 그 가야 할 페이즈가 _skipPhase 목록에 들어있다면 루프 안으로 진입합니다.
+    - if가 아니고 while인가? 효과가 중첩되어 연속으로 스킵해야 할 수 있기 때문입니다. 예를 들어 "드로우 스킵"과 "플레이 스킵" 디버프에 동시에 걸렸다면, 드로우 단계를 건너뛰고 나서 다음 단계인 플레이 단계마저 건너뛰어야 합니다. while문이 이 연쇄 스킵을 가능하게 합니다.
+  3. 스킵 소모 (Remove): 스킵을 실행했으므로 _skipPhase.Remove(nextCandidate)를 통해 예약된 스킵을 지워줍니다.
+  만약, 스킵을 타고 넘어간 다음 페이즈가 하필 사이클의 끝인 StandBy라면,
+  ```csharp
+    PhaseState tempNext = GetStandardNextPhase(nextCandidate);
+    if (tempNext == PhaseState.StandBy) { ... break; }
+  ```
+  이 안전장치를 통해 더 이상 스킵을 확인할 필요 없이 그대로 사이클을 종료(루프 탈출)하도록 구성했습니다.
