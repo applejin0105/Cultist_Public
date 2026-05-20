@@ -553,3 +553,256 @@ if (selected != null)
 <img width="750" height="560" alt="법선2" src="https://github.com/user-attachments/assets/dcc8a70e-541b-47bc-bf36-6bc5ddceec64" />
 
 [이 Curve Line은 대학생때 배운 Computer Animation에서 Laplician Editing 개념을 상기하며 구성해보았습니다.](https://waterglass0105.tistory.com/67)
+
+#### Chapter 2. 시스템
+> 카드 이동, 카드 액션, 카드 필드 그리고 덱 생성과 불러오기
+
+##### [`CardMovementSystem.cs`](./Scripts/Systems/CardMovementSystem.cs)
+> 카드가 이동하는 단일 경로(출발지 제거 → 도착지 추가)
+
+카드의 이동을 담당하는 시스템입니다. 카드 게임, 특히 핸드, 덱, 필드, 교역소로의 이동이 매우 활발하고 자주 이루어지기 때문에 이동간의 에러가 발생하거나 문제가 생기는 경우를 사전에 방지하고자 구현한 시스템입니다.
+
+게임 내에서 지원하는 모든 카드 이동을, 각각에 맞게 모두 지원하고있습니다.
+
+##### [`GameActionSystem.cs`](./Scripts/Systems/GameActionSystem.cs)
+> Draw, Play, Reveal 규칙 관리 시스템
+
+게임의 규칙을 관리하는 시스템입니다.
+
+[셋업]
+- `GameActionSystem(GameState, IPlayerInputProvider)`: `GameState`와 입력 제공자를 주입받아 보관. `StatSystem`도 `GameState`로부터 가져옴.
+- `SetGameRuleSystem`: 승패 판정 시스템 주입. StatSystem에도 같이 전달 (순환 참조 피하려고 사후 주입)
+- `SetEffectRunner(EffectRunner)`: 이펙트 실행기 주입. `OnReveal`·`OnHand`·`OnDestroyed` 같은 트리거를 발화시킬 때 사용
+- `SetTargetResolver(TargetResolver)`: 타겟 해석기 주입. `CardCondition` 기반 드로우 등에서 후보 카드 검색에 사용
+- `CheckGameRules`: 행동 후 GameRuleSystem의 필드/스탯 조건 검사 호출. 승패 갱신 트리거
+
+[드로우]
+- `Draw(Player, DrawRule)`: Draw Rule을 기반으로 플레이어의 Draw를 처리
+- `FetchCardAsync(Player, DrawRule)`: 조건부 검색이거나 일반 덱 pop을 통해 카드를 확보. 덱이 비어있다면 사기사 카드 자동 드로우
+- `ResolveDraftDraw(Player, List<CardInstance>)`: N장 보여주고 1장 선택. 선택된 건 손패로, 나머진 교역소로
+- `ResolveSimpleDraw(Player, List<CardInstance>)`: Card Effect 중 OnHand 트리거 발화 시 작동. 가져온 카드 전부 손패로.
+
+[교역·기아]
+- `Trade(Player)`: 교역소에서 카드 1장 선택해 손패로. OnHand 트리거. (앞에서 `RecordAction(ActionType.Trade)` 누락이 이 부분이었습니다. 흑흑... 어쩐지...)
+- `Starve(Player, amount, shuffle)`: 플레이어 덱에 기아 카드 N장 추가하고 셔플
+
+[공개]
+- `Reveal(Player, CardInstance, RevealReason)`: 카드 공개의 풀 파이프라인. 카드 효과에 따라 검증을 건너뛰는(Echo) 분기까지 모두 처리
+- `CheckRevealRequirement(Player, CardInstance)`: 공개 비용 검증
+  - 자살 방지(Cultist가 충분한가?) &&
+  - 요구 심볼 충족?(SymbolR) &&
+  - JSON 정의 RevealCondition 충족?
+- `CanRevealCard(Player, CardInstance)`: 공개 가능한 상태 검증
+  - 본인 차례 &&
+  - Play 페이즈 &&
+  - FieldBack 상태인지
+
+`Reveal`의 내부 단계는 대략적으로 다음과 같습니다.
+  1. 사유별 검증 우회 (Echo는 비용 우회, Manual은 전부 검사)
+  2. IsUniqueReveal 같은 Feat 제약 검사
+  3. CheckRevealRequirement (비용·조건)
+  4. OnRevealCost 트리거 (비용 지불, Cancel 가능)
+  5. CardMovementSystem.MoveCard → FieldFront
+  6. 사운드·보이스 RPC (사기사는 전체방송, 일반은 본인)
+  7. StatSystem.UpdatePlayerStats + 동기화
+  8. OnReveal 트리거 (Echo면 isEcho=1 변수 주입)
+  9. CheckGameRules
+
+[카드 내려놓기]
+- `Play(Player, handCard, parentCard, slotIndex)`: 손패 카드를 필드 트리에 자식으로 삽입. 배치 후 `IsRevealImmediately`가 `true`라면, 자동 `Reveal`
+- `CanPlayCard(Player, hand, parent)`: 카드 내려놓기 & 사용하기 검증
+  - 본인 손패/턴/Play 페이즈 &&
+  - 부모 카드의 Junction 한계 &&
+  - 플레이어 MaxJunction
+
+`Play`의 내부 단계는 대략적으로 다음과 같습니다.
+1. CanPlayCard 검증
+2. FieldState.GetNodeByInstanceId로 부모 노드 확보(없으면 생성. 없다는건? 루트카드라는거~)
+3. 새 FieldNode 만들어 InsertChild(slotIndex, ...)
+4. CardMovementSystem.MoveCard → Zone.Field, FieldBack
+5. 배치 사운드 RPC
+6. StatSystem.UpdatePlayerStats
+7. IsRevealImmediately면 즉시 Reveal 호출
+
+[카드 사용하기]
+- `Use(Player, CardInstance)`: 뒷면으로 존재하는 카드 혹은 앞면으로 존재하는 카드 중 `OnClick` 트리거가 존재하는 카드를 클릭했을 때 `OnClick` 트리거 발화.
+  - 본인 차례
+  - Play 페이즈
+- `CanUseCard(Player, CardInstance)`: 사용 가능 검증을 한 곳에 모아둔 헬퍼
+
+[파괴·추방]
+- `Destroy(Player, targetCard)`: 신도 카드 파괴. Echo 분기(다른 플레이어가 IsEcho 카드를 파괴 시도하면 파괴 대신 공개). OnPreDestroy → 이동 → OnDestroyed 트리거. 복제본을 교역소에 추가 (Crisis 제외)
+  - 앞면 카드는 파괴 불가 (게임 룰).
+  - `IsEcho` 카드를 다른 플레이어가 파괴하려 하면 → Reveal(RevealReason.Echo)로 전환.
+  - `IsCrisis` 카드는 복제본 미생성. (Exile과 동일하게 취급)
+- `Exile(Player, targetCard)`: 파괴와 거의 동일하되 복제본 생성 안 함. `ActionType.Exile`로 기록. `OnDestroyed` 트리거는 공유!
+
+[유틸]
+- `IsPlayerAlive(Player)`: `PlayerState.LifeStatus` == Alive 확인. 모든 public 액션의 첫 줄에서 호출. **탈락자 액션 차단**
+
+즉, `Draw`, `Trade`, `Starve`, `Reveal`, `Play`, `Use`, `Destroy`/`Exile`은 다음의 **공통 패턴**을 가지고 설계했습니다.
+  1. IsPlayerAlive 체크 (탈락자 차단)
+  2. 본인 차례/페이즈 검증 (Can*Card 헬퍼)
+  3. 비용·조건 검증 (특히 Reveal)
+  4. 실제 상태 변경 (CardMovementSystem 등)
+  5. 사운드 RPC
+  6. StatSystem 갱신 + 동기화
+  7. 관련 트리거 발화 (OnReveal, OnHand, OnDestroyed...)
+  8. CheckGameRules (승패 판정)
+
+##### [`FieldSystem.cs`](./Scripts/Systems/FieldSystem.cs)
+> 카드를 필드 트리에 배치하는 필드 조작 로직
+
+##### [`DeckSystem.cs`](./Scripts/Systems/DeckSystem.cs)
+> 게임 로직이 덱을 다루는 진입점
+##### [`DeckRepository.cs`](./Scripts/Data/Repositories/DeckRepository.cs)
+> 파일 시스템·JSON 직접 IO (데이터 접근 계층)
+
+`DeckSystem`과 `DeckRepository`은 두 클래스가 `Repository` 패턴으로 짝지어 동작합니다.
+  - `DeckRepository`: 덱이 어디 저장되어 있고, 어떻게 읽고·쓰고·검증되는지 만 안다. 게임 룰은 모름.
+  - `DeckSystem`: 게임에 어떤 덱을 어떻게 투입할지 만 안다. 파일 위치·포맷은 모름.
+
+`DeckSystem`이 `DeckRepository`를 생성자로 주입받습니다. (Repository 패턴)
+
+##### `DeckRepository`
+
+게임의 모든 덱은 두 종류로 나뉘고, 각각의 JSON에 배열 형태로 저장되어있습니다.
+  - `샘플 덱`(`SampleDeckDBTargetFilePath`): 기본 제공되며, **IsSmaple = true. 삭제 불가**입니다.
+  - `플레이어 덱`(`PlayerDeckTargetFilePath`): 사용자가 만들고 저장한 덱
+
+`LoadAllDecksAsync`를 통해 이 두 소스를 모두 읽고, 덱을 불러옵니다. 샘플 덱 이름은 플레이어가 사용할 수 없게 하려는 기획 의도가 있었지만, 저장 진입점(`SaveCurrentDeckAsync`)에서 중복 검사가 플레이어 덱 목록에만 한정되어 있어 의도가 강제되지 않는 상태였습니다. 로드 시 충돌이 일어나면 플레이어 덱이 우선되는 `fallback`이 있었지만, 이는 '발생하면 안 되는 상황'을 처리하는 보험일 뿐 의도를 직접 반영한 코드가 아니었습니다. 샘플 이름 집합을 유지하고 저장 입구에서 차단하는 1차 방어를 추가해 의도를 코드로 정착시켰습니다.
+
+```csharp
+            if (_sampleDeckNames.Contains(_currentDeckData.deckName))
+            {
+                Debug.LogWarning($"[DeckRepository] '{_currentDeckData.deckName}'은 샘플 덱 이름이라 사용할 수 없습니다.");
+                return false;
+            }
+```
+
+파일 입출력의 경우, 동시성 문제가 발생할 수 있습니다. 읽는 중에 쓰기가 동시에 일어나면 파일이 깨져버릴 수 있기에, `SemaphoreSlim`을 적용했습니다. `LoadPlayerDeckAsync`와 `SavePlayerDeckToFileAsync`가 이 락을 거칩니다. 오직 단 1개의 동시 접근만 허용하였습니다. 그리고 `await _fileLock.WaitAsync()` → 작업 → `try/finally`로 항상 `Release()`하여 안정성을 높였습니다.
+
+```csharp
+private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
+```
+
+각 메서드에 대한 간단한 설명은 다음과 같습니다.
+
+[로딩]
+- `LoadAllDecksAsync()`: 샘플 + 플레이어 덱 전부, 이름→DeckData 딕셔너리로 저장
+- `LoadPlayerDeckAsync()`: 플레이어 덱 파일만, 동시성 락 통과
+
+[편집] - 현재 편집 중인 덱 `_currentDeckData` 한 개를 잡고 작업합니다.
+- `CreateNewDeck(name, rootCardId)`: 새 덱 시작
+- `LoadDeckForEditingAsync(name)`: 기존 덱을 편집 모드로 불러옴 (원본 이름 `_originalEditingDeckName`도 저장)
+- `AddCardToCurrentDeck(cardId)`: 카드 추가, Cultist 값 기준 자동 정렬
+- `RemoveCardFromCurrentDeck(cardId)`: 카드 제거
+- `ClearCurrentDeck()`: 편집 상태 초기화
+
+[저장·삭제]
+- `SaveCurrentDeckAsync()`: 30장 정확히 채웠을 때만 저장. 원본 이름이 있으면 덮어쓰기로 처리
+- `DeleteDeckAsync(name)`: 샘플 덱은 삭제 불가
+
+[검증·제약]
+- `SanitizeDecks()`: 카드 카탈로그에 없는 카드/잘못된 루트 제거
+- `IsContainOver3(id)`: 같은 카드 3장 초과 금지
+- `IsCollectible 체크`: 수집 불가 카드(Card.IsCollectible == false)는 덱에 못 넣음
+- `IsRoot 분리`: 루트 카드는 cardIds에 안 들어가고 별도 rootCardId 필드로
+
+[이름 중복 방지 — Regex]
+```csharp
+        private string GenerateUniqueDeckName(List<DeckData> existingDecks, string deckName)
+        {
+            if (existingDecks.All(d => d.deckName != deckName)) return deckName;
+
+            int maxIndex = 0;
+            var pattern = $@"^{Regex.Escape(deckName)}_(\d+)$";
+
+            foreach (var deck in existingDecks)
+            {
+                if (deck.deckName == deckName) continue;
+                var match = Regex.Match(deck.deckName, pattern);
+                if (match.Success)
+                {
+                    maxIndex = Math.Max(maxIndex, int.Parse(match.Groups[1].Value));
+                }
+            }
+
+            return $"{deckName}_{maxIndex + 1}";
+        }
+
+```
+
+프로그래머가 사랑하는 정규식입니다. 원하던 효과는 덱 이름이 이미 있으면 `_숫자`를 붙여서 유일한 이름으로 만들어서 돌려주는 것이고, 그 숫자는 같은 베이스 이름을 가진 기존 변형들 중 가장 큰 인덱스 + 1로, 윈도우의 파일 시스템 생성처럼 진행하고자 했습니다.
+
+코드를 하나씩 살펴보겠습니다.
+
+  1. 조기 반환
+    ```if (existingDecks.All(d => d.deckName != deckName)) return deckName;```
+    All(...)은 "리스트의 모든 원소가 조건을 만족하는가?" 를 묻습니다. 여기선 "모든 기존 덱의 이름이 이 이름과 다른가?" 즉, "이 이름이 어디에도 없는가?". 답이 true 면 충돌이 없으니 입력 이름 그대로 반환합니다.
+  2. 핵심 정규식
+    ```var pattern = $@"^{Regex.Escape(deckName)}_(\d+)$";```
+    문자열 보간 + verbatim 문자열($@"...") 안에서 정규식 패턴을 만듭니다.
+    
+    | 토큰 | 뜻 |
+    | :--- | :--- |
+    | `^` | 문자열 시작 |
+    | `{Regex.Escape(deckName)}` | 입력된 덱 이름(메타 문자 이스케이프 처리됨) |
+    | `_` | 리터럴 언더스코어 |
+    | `(\d+)` | 숫자 1개 이상을 캡처 그룹 1번으로 잡음 |
+    | `$` | 문자열 끝 |
+
+  3. 기존 덱들 훑으며 최대 인덱스 찾기
+    ```csharp
+        foreach (var deck in existingDecks)
+        {
+            if (deck.deckName == deckName) continue;     // 베이스 이름 자체는 건너뜀
+            var match = Regex.Match(deck.deckName, pattern);
+            if (match.Success)
+            {
+                maxIndex = Math.Max(maxIndex, int.Parse(match.Groups[1].Value));
+            }
+        }
+    ```
+  4. 최종 반환
+    ```return $"{deckName}_{maxIndex + 1}";```
+
+##### `DeckSystem`
+
+`DeckSystem`은 비교적 간단합니다. Repository 주입 받아 보관하고, 모든 덱 데이터를 이름→DeckData 딕셔너리 형태로 캐싱합니다. 그리고 초기화 1회 보장 플래그를 통해 덱을 로딩시킵니다.
+
+```csharp
+private readonly DeckRepository _deckRepository;
+private Dictionary<string, DeckData> _deckDataCache;
+private bool _isInitialized = false;
+```
+- `Initialize()`: Repository에서 모든 덱을 불러와 `_deckDataCache`에 적재. `_isInitialized`로 이중 초기화 방지.
+- `CreateDeckState(Player player, string deckName)`: 캐시에서 덱 이름으로 `DeckData`를 찾고, `IdGenerator.ReturnInstanceIdDeck`로 인스턴스 ID가 부여된 DeckState 를 만들어 반환. 이를 통해 **카드마다 교유 `InstanceId`를 부여하고, 이것으로 서버가 카드를 식별합니다.**
+- `Reload()`: `_isInitialized = false`로 리셋 후 다시 `Initialize`. 덱 데이터를 외부에서 수정한 뒤 캐시 갱신용.
+
+즉, 이 두가지 클래스는 다음과 같이 작동하게 됩니다.
+```
+NetworkGameController.InitializeServerLogic()
+  └ var deckRepo = new DeckRepository(CardCatalog.Instance);    // 1. 주입 대상 준비
+  └ _deckSystem = new DeckSystem(deckRepo);                     // 2. 주입
+  └ await _deckSystem.Initialize();                             // 3. 캐시 채움
+       └ _deckRepository.LoadAllDecksAsync()
+            ├─ 샘플 덱 JSON 파싱
+            └─ 플레이어 덱 JSON 파싱 → 병합
+```
+
+*DeckSystem은 인게임 진입 시점의 진입점, DeckRepository는 덱 편집 UI의 진입점.*으로 구분하였습니다.
+
+여기에서 한가지 과거의 잔재가 있습니다.
+```csharp
+// NetworkGameController.StartGameLogic 내부
+DeckData dData = InGameSessionManager.Instance.GetPlayerDeck(pComp.netId);
+var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
+```
+실제 인게임에서 플레이어의 덱이 `ServerGameState`로 들어가는 경로를 추적해보면 이 코드를 볼 수 있습니다.
+
+클라이언트가 `Cmd_SubmitDeckData로` 자기 덱을 서버에 보내고, 서버는 `InGameSessionManager`에 보관된 그 데이터를 직접 `IdGenerator.ReturnInstanceIdDeck`로 변환합니다. 이 경로엔 `DeckSystem.CreateDeckState`가 호출되지 않습니다.
+
+즉, `DeckSystem.CreateDeckState`는 실제 멀티플레이 흐름에서 우회됩니다. `DeckSystem`이 완전히 쓸모없는 건 아니지만, 현 구조에서 `CreateDeckState`는 사실상 사용처를 잃은 상태입니다.
+
+이게 사실, 원래는 덱을 생성 -> 서버에 덱을 보내고 -> 서버에서 이 덱이 올바른 덱인지 검토 -> 게임 플레이가 순서였습니다. 그런데 앞서 `DeckRepository`를 설계하면서 *굳이?*가 되었습니다. 덱 생성이야 자체에서 판단 가능하고, 서버에서는 이미 '검증된 덱'을 받아와서 ID만 보고 `InstanceId` 일괄 발급해서 관리하면 되는데, 서버에 부담을 굳이 주어야 하나 싶어서 그냥 과감하게 사용하지 않았습니다. 결국 DeckSystem.CreateDeckState는 사용처가 줄었고, 지금은 전혀 사용하지 않고 있습니다. 추후 이 부분을 삭제하고 정리할 예정입니다!!
