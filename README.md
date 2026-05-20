@@ -483,6 +483,8 @@ if (selected != null)
 ##### [`DeterministicTreeLayout.cs`](./Scripts/Domain/Structure/Field/DeterministicTreeLayout.cs)
 > 필드 시각화 및 드롭존 처리
 
+<img width="624" height="626" alt="Screenshot 2026-05-20 221608" src="https://github.com/user-attachments/assets/24a87722-d3ec-4df4-8ecd-d4f9cb78a08b" />
+
 [라인 테스트 영상](https://youtu.be/THyzJLCemfU)
 
 초기 기획 의도는 '마치 나무 뿌리가 무질서하게 뻗어나가는 느낌으로 필드를 채워 넣고, 그걸 멀리서 바라봤을 때의 심미적인 효과'를 요구했습니다. 이에 맞추어 랜덤하게 카드를 생성하면서도 겹치지 않는 로직을 구현했으나, 이는 기각되었고 결국 '정형화된 카드 필드'와 함께 '카드를 놓는 방식에 따라 모양이 바뀌는 구조'로 정립되었습니다.
