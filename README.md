@@ -55,7 +55,7 @@
 5. 외부 접속을 막는 문제(NAT)가 있다면 해결해야한다.
 6. 중간에 누군가 '구라'를 쳤는지 검증해야한다.
 
-다만, 이건 지금의 실력으로 전부 구현하는건 불가능하므로, 이 저수준(low-level) 네트워킹을 지원해주는 Mirro와 Steam Facepunch를 사용했습니다.
+다만, 이건 지금의 실력으로 전부 구현하는건 불가능하므로, 이 저수준(low-level) 네트워킹을 지원해주는 Mirror와 Steam Facepunch를 사용했습니다.
 1~4번 과정은 일부는 Mirror가, 일부는 Transport가 담당하고, 5번은 Steam에서 담당하고, 6번 검증은 Mirror의 권위 모델과 제가 설계한 서버 코드에서 담당하게 됩니다.
 
 ### Mirror
@@ -65,7 +65,7 @@ Mirror는 Unity용 고수준(High-level) 네트워킹 라이브러리입니다. 
 이 프로젝트에서도 사용중인, Mirror에서 제공하는 메타 그리고 cs는 다음과 같습니다.
 
 `NetworkManager`:	네트워크 전체를 켜고 끄는 총괄 매니저. 당신의 GameNetworkManager가 이걸 상속
-`NetworkBehaviour`:	네트워크로 동기화될 수 있는 특별한 MonoBehaviour". GamePlayer, NetworkGameController가 이걸 상속
+`NetworkBehaviour`:	네트워크로 동기화될 수 있는 특별한 MonoBehaviour. GamePlayer, NetworkGameController가 이걸 상속
 `[SyncVar]`: 이 변수를 모든 클라와 자동 동기화
 `SyncList<T>`: 변수 대신 리스트(컬렉션)를 자동 동기화
 `[Command]`: 클라에서 호출했지만 서버에서 실행되는 메서드
@@ -74,16 +74,7 @@ Mirror는 Unity용 고수준(High-level) 네트워킹 라이브러리입니다. 
 
 `[Command]`의 경우 다음과 같이 작동하게 됩니다.
 ```[Command] public void Cmd_RevealCard(int cardInstanceId) { ... }```
-이렇게 코드가 되어있을 때, Mirror에서는 다음과 같이 작동합니다.
-```
-작성한 코드
-    ↓ C# 컴파일
-컴파일된 DLL
-    ↓ Mirror Weaver가 가로채서 코드 주입
-"Cmd_RevealCard를 호출하면 → 실제로는 인자를 바이트로 직렬화 → 네트워크로 서버에 전송 → 서버에서 원본 메서드 실행"
-하는 코드로 자동 변환
-```
-이때, Mirror에서 컴파일된 코드를 사용하는 것을 *위빙(Weaving)*이라고 합니다. 즉, **직렬화를 Mirror가 위빙을 통해 컴파일 시점에 자동 생성해줍니다.**
+이렇게 코드를 작성해두면, **Mirror가 컴파일 단계에서 직렬화·네트워크 전송 코드를 자동으로 만들어줍니다.** 클라이언트가 `Cmd_RevealCard(...)`를 호출하면 인자가 알아서 바이트로 변환되어 서버로 전송되고, 서버 측에서 원본 메서드가 실행됩니다. 개발자는 함수 한 번 부르듯 쓰지만 내부적으로는 네트워크 왕복이 일어나는 셈입니다.
 
 다만 이런 Mirror가 하지 않는 일도 있습니다. Mirror는 SyncVar, RPC, 직렬화와 같이 '무엇을 보낼지'는 다 해줍니다. 그런데... 실제로 그 바이트를 인터넷 어딘가 머나먼 그곳으로 보내는 것은 하지 않습니다. 이때 사용되는 것이 Transport입니다.
 
@@ -93,6 +84,8 @@ Transport는 **갈아끼울 수 있는 플러그인**입니다.
 - FizzyFacepunch: Steam P2P 기반. 현재 프로젝트에서 실제 배포용으로 사용하고 있습니다.
 
 즉, Mirror는 IP로 보내든 Steam으로 보내든 1도 신경 안씁니다. 접속 방식을 바꾸고 싶다면, Transport만 바꾸어 끼면서 로컬로할지 스팀으로 할지만 결정됩니다. 이 또한, 내부 코드로 구현되어있습니다.
+
+기획 단계에서 "한 PC에서 여러 인스턴스로 빠르게 붙여 테스트하고 싶다"는 요구가 있었는데, 이 Transport 교체 구조가 그대로 답이 됐습니다. 배포 빌드는 `FizzyFacepunch`(Steam P2P)로 묶이지만, 개발 중에는 `kcp2k`로 갈아끼우고 같은 빌드를 여러 개 띄워 `127.0.0.1`로 붙입니다. Steam 로그인 없이도 매치가 성립하므로 반복 테스트가 훨씬 가벼워졌습니다.
 
 ### Facepunch
 
@@ -135,7 +128,7 @@ FizzyFacepunch의 `FizzyFacepunch.cs`입니다.
 
 Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어보실 수 있습니다. 본격적인 멀티플레이 구성을 진입하기 전, 저는 다음과 같은 기준들을 세워보았습니다.
 1. 운영 비용 구조: 출시 전 검증되지 않은 단계에서, CCU(동시 접속자) 기반 반복 결제는 리스크이다.
-2. 플랫폼 적합성: 타겟 플랫폼이 Steam이무로, 친구 초대·오버레이 참여가 네이티브여야 한다.
+2. 플랫폼 적합성: 타겟 플랫폼이 Steam이므로, 친구 초대·오버레이 참여가 네이티브여야 한다.
 3. 로컬 플레이 보장: *기획자*의 요구는 '하나의 컴퓨터에서 여러개 쉽게 돌릴 수 있도록 테스트 환경을 제공해달라'이다.
 4. 의존성 확인: 특정 클라우드 벤더에 게임의 연결 계층 전체를 묶는 것은 아무래도 좀 부담된다.
 
@@ -228,7 +221,16 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 ##### [`Card.cs`](./Scripts/Domain/Entities/Card.cs)
 > DB에서 로드되는 불변 카드 정의(이름·상징·효과 텍스트 등)
 
-실질적인 카드의 데이터를 담고 있습니다. 카드가 가져야 하는 **모든 데이터**를 가지고있습니다.
+카드 *종류* 자체의 원본 데이터입니다. JSON으로 작성된 카드 DB에서 로드되어, 게임 내내 같은 종류의 카드라면 모두 이 인스턴스 하나를 공유합니다.
+
+가지고 있는 것은 크게 세 부류입니다.
+- **식별 정보**: `Id`, `Name`, `Description`, `Effect`
+- **수치**: `Cultist`(신도), `Junction`(연결 가능 수), 상징 배열 `SymbolR`/`SymbolG`
+- **규칙 플래그**: `IsRoot`, `IsRevealImmediately`, `IsEcho`, `IsCrisis`, `IsForceSelect`, `IsCollectible` 등
+
+모든 필드는 생성자에서만 채워지고 외부 변경 경로가 없습니다(`{ get; }` 또는 `private` 백킹 필드). 상징 배열도 `Clone()`해서 보관하고 외부에는 `IReadOnlyList<int>`로만 노출합니다 — 외부 코드가 받은 리스트를 휘저어도 원본은 안전합니다.
+
+`Card`는 카드 *종류*만 표현할 뿐, "이 카드가 지금 누구의 손에 있는가" 같은 런타임 상태는 일절 가지지 않습니다. 그 자리는 다음에 설명할 `CardInstance`가 채웁니다.
 
 
 ##### [`CardInstance.cs`](./Scripts/Domain/Entities/CardInstance.cs)
@@ -302,7 +304,7 @@ TurnSystem은 GameState에서 턴 주인의 PlayerState를 조회하고, 그 데
 ##### [`DeckCollection.cs`](./Scripts/Domain/Structure/Deck/DeckCollection.cs)
 > 덱 카드 순서를 다루는 LIFO 컬렉션
 
-오직 Deck을 다루는 LIFO 컬렉션입니다. `IEnumerable<CardInstance>` 인터페이스를 통해 CardInstance들을 foreach로 순회할 수 있다는 계약을 명시하고있습니다. 이를 통해 `DeckCollection`에서 `foreach`를 통해 CardInstacne를 호출할 수 있습니다.
+오직 Deck을 다루는 LIFO 컬렉션입니다. `IEnumerable<CardInstance>` 인터페이스를 통해 CardInstance들을 foreach로 순회할 수 있다는 계약을 명시하고있습니다. 이를 통해 `DeckCollection`에서 `foreach`를 통해 CardInstance를 호출할 수 있습니다.
 
     - foreach 사용 가능 — foreach (var c in deck)
     - LINQ 전체 사용 가능 — .Where(), .Select(), .Count(), .FirstOrDefault(), .Any() … 이 모든 LINQ 메서드는 IEnumerable<T>에 대한 확장 메서드라서, 구현하는 순간 전부 켜집니다.
@@ -325,9 +327,9 @@ Root 카드를 설정하고, `GameActionSystem`과 `TurnSystem` 그리고 `DrawC
 - 모든 노드는 부모가 하나다
 - `ChildrenInstanceIds` 목록과 실제 부모-자식 관계가 일치해야 한다
 - `Nodes` 딕셔너리(`InstanceId` → `FieldNode`)이 트리 실제 구성과 어긋나면 안 된다
-이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해 AddNode를 오버라이드하면(메서드가 virtual이 아니어도 new로 가리거나 부분 재정의 시) 이 규칙을 깰 수 있고, 그렇게 되면 이를 읽는 핵심 코드들인 `StatSystem`부터 시작해서, `NetworkGameController.SyncFullGameState`의 모든 계산이 틀린 값을 내게 됩니다. 이 때문에 이를 원천 차단하기 위해 `sealed`로 구현했습니다. 또한, 필드는 앞으로도 여러 종류가 없고, 무엇보다 `sealed`를 통해 오버라이드가 없음이 보장되므로 **JIT가 메서드 호출을 디버추얼라이즈·인라인** 할 수 있습니다. 물론, 지금 프로젝트 규모에서는 미미하지만 그래도 어느정도 최적화 이점입니다!
+이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해서 `AddNode`를 다른 동작으로 바꾸면, 이 규칙이 깨지는 순간 이를 읽는 핵심 코드들 — `StatSystem`부터 `NetworkGameController.SyncFullGameState`까지 — 의 모든 계산이 틀린 값을 내게 됩니다. 이걸 입구에서 막기 위해 `sealed`로 잠갔습니다. 필드 트리는 앞으로도 다른 변형이 필요할 일이 없으므로, 확장성을 포기하는 대가도 없었습니다.
 
-동일한 이유로, 대부분의 도메인 상태·자료구조의 경우 거의 다 `seald` 처리해두었습니다.
+동일한 이유로, 대부분의 도메인 상태·자료구조의 경우 거의 다 `sealed` 처리해두었습니다.
 
 자료구조가 가져야 할 기본 덕목들은, 거기에 이 프로젝트에서 필요한 연산은 모두 구현해두었습니다. 기본적으로 필드 트리를 생성하고, 노드를 추가하거나 받아오고, 추후 Sect 조회가 필요한 경우 사용할 탐색 로직들을 구현했습니다.
 
@@ -653,6 +655,17 @@ if (selected != null)
 ##### [`FieldSystem.cs`](./Scripts/Systems/FieldSystem.cs)
 > 카드를 필드 트리에 배치하는 필드 조작 로직
 
+`FieldSystem`은 카드를 *어떻게* 트리에 끼워 넣을지를 책임집니다. `FieldTree`는 트리 자료구조 자체의 규칙(부모는 하나, 노드는 중복 불가 등)을 지키는 데 집중하고, `FieldSystem`은 "이 카드를 누구의 자식으로 어느 존(`Zone`)에, 어느 상태(`CardStatus`)로 둘 것인가" 같은 **게임 규칙 단위의 배치**를 담당합니다. 그래서 외부의 시스템들(`GameActionSystem`, `NetworkGameController`)은 `FieldTree`를 직접 만지지 않고 항상 `FieldSystem`을 거치게 됩니다.
+
+배치는 두 갈래입니다.
+
+- `PlaceAsStartCard(GameState, rootInstanceId)`: 게임 시작 시 루트 카드 배치. 부모가 없는 노드로 트리에 등록하고, 카드 상태를 곧장 `FieldFront`(앞면)로 둡니다. 루트는 처음부터 공개된 채로 깔리기 때문입니다.
+- `PlaceAsNewCard(GameState, player, parentInstanceId, instanceId)`: 게임 중 일반 배치. 부모 노드를 찾아 자식으로 새 `FieldNode`를 붙이고, 카드는 `FieldBack`(뒷면) 상태로 필드에 올라갑니다. 공개는 별도로 `GameActionSystem.Reveal`에서 처리합니다.
+
+두 경로 모두 마지막엔 `CardMovementSystem.MoveCard`로 카드의 존·상태를 일관되게 갱신합니다. 트리 조작과 카드 이동을 한 함수 안에서 묶어, *"필드에 올라간 카드는 반드시 `Zone.Field`에 있다"* 라는 불변식을 코드 흐름으로 강제했습니다.
+
+설계상 `FieldSystem`은 매우 얇습니다. 정렬·탐색·자식 슬롯 관리 같은 무거운 로직은 모두 `FieldState`/`FieldTree`에 있고, `FieldSystem`은 "트리에 올리는 시점에 무엇이 함께 일어나야 하는가"만 묶어주는 역할입니다.
+
 ##### [`DeckSystem.cs`](./Scripts/Systems/DeckSystem.cs)
 > 게임 로직이 덱을 다루는 진입점
 ##### [`DeckRepository.cs`](./Scripts/Data/Repositories/DeckRepository.cs)
@@ -667,7 +680,7 @@ if (selected != null)
 ##### `DeckRepository`
 
 게임의 모든 덱은 두 종류로 나뉘고, 각각의 JSON에 배열 형태로 저장되어있습니다.
-  - `샘플 덱`(`SampleDeckDBTargetFilePath`): 기본 제공되며, **IsSmaple = true. 삭제 불가**입니다.
+  - `샘플 덱`(`SampleDeckDBTargetFilePath`): 기본 제공되며, **IsSample = true. 삭제 불가**입니다.
   - `플레이어 덱`(`PlayerDeckTargetFilePath`): 사용자가 만들고 저장한 덱
 
 `LoadAllDecksAsync`를 통해 이 두 소스를 모두 읽고, 덱을 불러옵니다. 샘플 덱 이름은 플레이어가 사용할 수 없게 하려는 기획 의도가 있었지만, 저장 진입점(`SaveCurrentDeckAsync`)에서 중복 검사가 플레이어 덱 목록에만 한정되어 있어 의도가 강제되지 않는 상태였습니다. 로드 시 충돌이 일어나면 플레이어 덱이 우선되는 `fallback`이 있었지만, 이는 '발생하면 안 되는 상황'을 처리하는 보험일 뿐 의도를 직접 반영한 코드가 아니었습니다. 샘플 이름 집합을 유지하고 저장 입구에서 차단하는 1차 방어를 추가해 의도를 코드로 정착시켰습니다.
@@ -735,37 +748,13 @@ private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
 
 프로그래머가 사랑하는 정규식입니다. 원하던 효과는 덱 이름이 이미 있으면 `_숫자`를 붙여서 유일한 이름으로 만들어서 돌려주는 것이고, 그 숫자는 같은 베이스 이름을 가진 기존 변형들 중 가장 큰 인덱스 + 1로, 윈도우의 파일 시스템 생성처럼 진행하고자 했습니다.
 
-코드를 하나씩 살펴보겠습니다.
+동작은 단순합니다.
 
-  1. 조기 반환
-    ```if (existingDecks.All(d => d.deckName != deckName)) return deckName;```
-    All(...)은 "리스트의 모든 원소가 조건을 만족하는가?" 를 묻습니다. 여기선 "모든 기존 덱의 이름이 이 이름과 다른가?" 즉, "이 이름이 어디에도 없는가?". 답이 true 면 충돌이 없으니 입력 이름 그대로 반환합니다.
-  2. 핵심 정규식
-    ```var pattern = $@"^{Regex.Escape(deckName)}_(\d+)$";```
-    문자열 보간 + verbatim 문자열($@"...") 안에서 정규식 패턴을 만듭니다.
-    
-    | 토큰 | 뜻 |
-    | :--- | :--- |
-    | `^` | 문자열 시작 |
-    | `{Regex.Escape(deckName)}` | 입력된 덱 이름(메타 문자 이스케이프 처리됨) |
-    | `_` | 리터럴 언더스코어 |
-    | `(\d+)` | 숫자 1개 이상을 캡처 그룹 1번으로 잡음 |
-    | `$` | 문자열 끝 |
+1. 입력 이름이 어디에도 없으면 그대로 반환 (`All(...)` 조기 반환).
+2. 그렇지 않다면 `^이름_숫자$` 패턴으로 기존 변형들을 훑으며 최대 인덱스를 찾고,
+3. 그 값 + 1을 붙여 새 이름을 만듭니다 (`이름_3` 다음은 `이름_4`).
 
-  3. 기존 덱들 훑으며 최대 인덱스 찾기
-    ```csharp
-        foreach (var deck in existingDecks)
-        {
-            if (deck.deckName == deckName) continue;     // 베이스 이름 자체는 건너뜀
-            var match = Regex.Match(deck.deckName, pattern);
-            if (match.Success)
-            {
-                maxIndex = Math.Max(maxIndex, int.Parse(match.Groups[1].Value));
-            }
-        }
-    ```
-  4. 최종 반환
-    ```return $"{deckName}_{maxIndex + 1}";```
+`Regex.Escape(deckName)`로 사용자가 덱 이름에 `.`이나 `*` 같은 정규식 메타 문자를 넣어도 안전하게 동작합니다.
 
 ##### `DeckSystem`
 
@@ -777,7 +766,7 @@ private Dictionary<string, DeckData> _deckDataCache;
 private bool _isInitialized = false;
 ```
 - `Initialize()`: Repository에서 모든 덱을 불러와 `_deckDataCache`에 적재. `_isInitialized`로 이중 초기화 방지.
-- `CreateDeckState(Player player, string deckName)`: 캐시에서 덱 이름으로 `DeckData`를 찾고, `IdGenerator.ReturnInstanceIdDeck`로 인스턴스 ID가 부여된 DeckState 를 만들어 반환. 이를 통해 **카드마다 교유 `InstanceId`를 부여하고, 이것으로 서버가 카드를 식별합니다.**
+- `CreateDeckState(Player player, string deckName)`: 캐시에서 덱 이름으로 `DeckData`를 찾고, `IdGenerator.ReturnInstanceIdDeck`로 인스턴스 ID가 부여된 DeckState 를 만들어 반환. 이를 통해 **카드마다 고유 `InstanceId`를 부여하고, 이것으로 서버가 카드를 식별합니다.**
 - `Reload()`: `_isInitialized = false`로 리셋 후 다시 `Initialize`. 덱 데이터를 외부에서 수정한 뒤 캐시 갱신용.
 
 즉, 이 두가지 클래스는 다음과 같이 작동하게 됩니다.
