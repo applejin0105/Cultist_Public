@@ -217,3 +217,337 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 <img width="3855" height="2750" alt="6  게임 종료" src="https://github.com/user-attachments/assets/275c5288-4fdf-4600-a01f-fcf5f0038d9b" />
 
 서버의 `GameRuleSystem`은 게임의 상태가 바뀔 때마다 승리조건을 판정합니다. 조건이 충족되면 `TriggerGameEnd(winnerSeat)`가 호출되고, 여기서 종료 전파를 `SyncVar` 두 개(`WinnerSeat`·`IsGameEnded`)로 처리합니다. 서버가 이 값을 설정하면 Mirror가 모든 플레이어에게 자동으로 전파하고, 각 클라이언트의 `OnGameEndedHook()`이 발화해 게임 종료 UI와 승/패 사운드를 재생합니다. 마지막으로 서버는 5초 후 `ServerChangeScene("03_Lobby")`로 전원을 로비로 되돌립니다.
+
+## Ⅲ. 핵심 기능 및 구현 로직 (Core Features)
+
+### 인게임 로직 구현
+
+#### Chapter 1. 게임 상태 모델
+> 불변 데이터 `Card`, 런타임 `CardInstance` 그리고 서버 주도 `GameState`
+
+##### [`Card.cs`](./Scripts/Domain/Entities/Card.cs)
+> DB에서 로드되는 불변 카드 정의(이름·상징·효과 텍스트 등)
+
+실질적인 카드의 데이터를 담고 있습니다. 카드가 가져야 하는 **모든 데이터**를 가지고있습니다.
+
+
+##### [`CardInstance.cs`](./Scripts/Domain/Entities/CardInstance.cs)
+> 게임 중 생성되는 런타임 카드 - 소유자·존·상태를 가짐
+
+게임 중 생성되는 런타임 카드입니다. 어떤 카드 종류인지(`CardId`)와 게임 내 고유 식별자(`InstanceId`)를 함께 가지며, 서버는 이 `InstanceId`로 카드 한 장 한 장을 통제합니다.
+
+설계상 `CardInstance`는 무거운 Card 객체를 직접 보관하지 않고 가벼운 `int`인 `CardId`만 들고 있습니다. 실제 카드 정의가 필요할 때만 `BaseData` 프로퍼티가 `CardCatalog`(`CardId` → `Card` 조회)를 통해 지연 조회합니다. 덕분에 네트워크 동기화 시에도 무거운 객체 대신 `int` ID만 오가게 되어, 통신·로직 부담을 최소화했습니다.
+
+```csharp
+        public int InstanceId { get; }
+        public int CardId { get; private set; }
+        public Player OwnerSeat { get; private set; }
+
+        public Zone Zone { get; private set; }
+        public CardStatus CardStatus { get; private set; }
+
+        public Card BaseData => CardCatalog.Instance.Get(CardId);
+```
+
+##### [`IdGenerator.cs`](./Scripts/Utils/IdGenerator.cs)
+> 덱 데이터를 인스턴스 ID가 부여된 `CardInstance`로 변환
+
+앞에서 설명했듯, 카드는 그 자체만으로 서버에서 사용되기에는 무겁고, '누구의' 카드인지 구별할 수 없기에 `CardInstance`를 사용합니다. 그리고 이 `CardInstance`가 가지는 고유한, 겹치면 안되는 고유값인 InstanceId를 생성해주는 `static class`입니다. 각 플레이어의 Index를 굳이 나눈 이유는 여기에 있습니다. 플레이어 1이라면 100부터, 2라면 200부터, 3이라면 300부터 시작하는 ID 값을 가지게 됩니다. 100 200 300을 각각 root 카드로 설정하고, 남은 카드들에 고유 ID를 붙여 관리하고 있습니다.
+
+##### [`GameState.cs`](./Scripts/Domain/State/Host/GameState.cs)
+> 서버가 단독으로 소유·관리하는 게임 전체 상태
+
+게임의 모든 상태가 이 한 클래스에 저장되어 있습니다. 카드 인스턴스, 플레이어 상태, 필드 상태, 각종 덱(플레이어 개별 덱·교역·사기사), 라운드별 행동 기록까지 **게임이 지금 상태**를 기록하는 클래스입니다. 이 객체는 오직 **서버(호스트)에서만 생성**되며, 클라이언트는 그 복제본만 받습니다. 서버 권위 모델의 중심이 되는 아주 중요한 클래스입니다.
+
+이 클래스는 다음 두 가지에 초점을 두어 설계했습니다.
+1. **모든 카드를 `InstanceId`로 찾을 수 있는 중앙 등록소**를 두었습니다. 카드가 덱에 있든 필드에 있든 교역소에 있든, 생성 시점에 `_cards` 사전에 등록되므로 `GetCard(instanceId)` 한 번이면 O(1)로 어떤 카드든 찾습니다. `CardInstance`에서 언급한 "서버는 `InstanceId`로 카드를 통제한다"의 실체가 바로 이 사전입니다. (카드 *종류* 조회인 `CardCatalog`와는 별개의 경로입니다.)
+2.  **어떤 카드·플레이어가 게임에 존재하는지를 외부에서 함부로 바꾸지 못하게 캡슐화**했습니다. 내부 컬렉션은 전부 `private`이고, 외부에는 `IReadOnlyList`·`IReadOnlyDictionary` 또는 조회 메서드로만 노출합니다. 컬렉션 구성을 바꾸려면 반드시 `AddPlayer`·`RegisterCard`·`RecordAction` 같은 정해진 메서드를 거쳐야 합니다. 이는 만일 클라이언트가 쉽게 접근 가능한 자신의 DB json을 수정해서 게임을 망칠 수 있기에, 상태의 원본은 통제된 경로로만 변한다는 원칙을 코드 구조로 강제한 것입니다.
+
+또한 카드 효과 시스템에는 `GameState` 전체가 아니라 `IEffectGameState` 인터페이스만 노출합니다. 이를 통해 상태를 *읽고 질문*할 수 있어도(`GetPlayerStat`, `GetHistoryCount` 등) 내부 구조에 직접 손대지는 못합니다.
+
+```csharp
+// 모든 카드의 중앙 등록소 — InstanceId로 O(1) 조회
+private readonly Dictionary<int, CardInstance> _cards = new();
+public IReadOnlyDictionary<int, CardInstance> Cards => _cards;   // 외부엔 읽기 전용 뷰만
+
+public CardInstance? GetCard(int instanceId)
+    => _cards.GetValueOrDefault(instanceId);
+
+// 플레이어 상태도 동일 — 내부는 private, 외부는 읽기 전용
+private readonly List<PlayerState> _players = new();
+public IReadOnlyList<PlayerState> Players => _players;
+```
+
+##### [`PlayerState.cs`](./Scripts/Domain/State/PlayerState.cs)
+> 플레이어별 상태(신도·심볼·필드·손패·생존 여부)
+
+각 플레이어의 상태를 나타냅니다. 이 플레이어가 가질 수 있는 최대 종파 개수를 정의하며, 플레이어의 *다음 카드 가져오기 단계 규칙*에 대한 정보를 가지고 있습니다.
+
+TurnSystem은 GameState에서 턴 주인의 PlayerState를 조회하고, 그 데이터를 바탕으로 게임을 진행합니다.
+
+```csharp
+        public void SetNextDrawRule(DrawRule drawRule)
+        {
+            NextDrawRule = drawRule;
+        }
+
+        public DrawRule ConsumeDrawRule()
+        {
+            var rule = NextDrawRule ?? DrawRule.Standard;
+            NextDrawRule = null;
+            return rule;
+        }
+```
+
+##### [`DeckCollection.cs`](./Scripts/Domain/Structure/Deck/DeckCollection.cs)
+> 덱 카드 순서를 다루는 LIFO 컬렉션
+
+오직 Deck을 다루는 LIFO 컬렉션입니다. `IEnumerable<CardInstance>` 인터페이스를 통해 CardInstance들을 foreach로 순회할 수 있다는 계약을 명시하고있습니다. 이를 통해 `DeckCollection`에서 `foreach`를 통해 CardInstacne를 호출할 수 있습니다.
+
+    - foreach 사용 가능 — foreach (var c in deck)
+    - LINQ 전체 사용 가능 — .Where(), .Select(), .Count(), .FirstOrDefault(), .Any() … 이 모든 LINQ 메서드는 IEnumerable<T>에 대한 확장 메서드라서, 구현하는 순간 전부 켜집니다.
+
+`DeckCollection`은 이렇게 `CardInstance`들을 LIFO로 관리하고, 카드 게임에서 덱 사용에 필요한 모든 로직을 수행하고 있습니다. 하지만, 게임의 System들에서 이를 직접 호출하고 사용하지 않습니다.
+
+`DeckCollection`은 기본적으로 C++에서 제공하는 algorithm 자료형을 본따서 만들었습니다. 즉, `DeckCollection`을 직접적으로 사용하는게 아니라, 이 자료구조를 바탕으로 이어서 나올 `DeckState`에서 이를 사용하고 있습니다.
+
+##### [`DeckState.cs`](./Scripts/Domain/State/DeckState.cs)
+> 플레이어별 덱 - DeckCollection을 감싸는 façade
+
+플레이어의 덱은 `DeckCollection`이라는 LIFO 컬렉션으로 관리되며, `DeckState`는 그 컬렉션을 감싸 플레이어 단위 덱 상태를 표현합니다.
+
+Root 카드를 설정하고, `GameActionSystem`과 `TurnSystem` 그리고 `DrawCommand`에서 `DeckState`의 내부 함수를 호출해 카드를 뽑거나, 추가하는 등의 로직을 수행합니다.
+
+##### [`FieldTree.cs`](./Scripts/Domain/Structure/Field/FieldTree.cs)
+> 필드를 다루는 Tree 컬렉션
+
+오직 PlayerField를 다루는 Tree 컬렉션입니다. 이 Tree의 경우, 다음의 구조 규칙을 가지고 있습니다.
+- 모든 노드는 부모가 하나다
+- `ChildrenInstanceIds` 목록과 실제 부모-자식 관계가 일치해야 한다
+- `Nodes` 딕셔너리(`InstanceId` → `FieldNode`)이 트리 실제 구성과 어긋나면 안 된다
+이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해 AddNode를 오버라이드하면(메서드가 virtual이 아니어도 new로 가리거나 부분 재정의 시) 이 규칙을 깰 수 있고, 그렇게 되면 이를 읽는 핵심 코드들인 `StatSystem`부터 시작해서, `NetworkGameController.SyncFullGameState`의 모든 계산이 틀린 값을 내게 됩니다. 이 때문에 이를 원천 차단하기 위해 `sealed`로 구현했습니다. 또한, 필드는 앞으로도 여러 종류가 없고, 무엇보다 `sealed`를 통해 오버라이드가 없음이 보장되므로 **JIT가 메서드 호출을 디버추얼라이즈·인라인** 할 수 있습니다. 물론, 지금 프로젝트 규모에서는 미미하지만 그래도 어느정도 최적화 이점입니다!
+
+동일한 이유로, 대부분의 도메인 상태·자료구조의 경우 거의 다 `seald` 처리해두었습니다.
+
+자료구조가 가져야 할 기본 덕목들은, 거기에 이 프로젝트에서 필요한 연산은 모두 구현해두었습니다. 기본적으로 필드 트리를 생성하고, 노드를 추가하거나 받아오고, 추후 Sect 조회가 필요한 경우 사용할 탐색 로직들을 구현했습니다.
+
+##### [`FieldNode.cs`](./Scripts/Domain/Structure/Field/FieldNode.cs)
+> 필드 트리의 노드(부모·자식 관계)
+
+FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신의 부모 `ParentInstanceId`, 자식인 `ChildrenInstanceIds`를 가지고 이를 관리합니다.
+
+##### [`FieldState.cs`](./Scripts/Domain/State/FieldState.cs)
+> 플레이어별 필드 - FieldTree를 감싸는 façade
+
+플레이어가 필드에 펼친 카드는 `FieldTree`라는 트리 구조로 관리되며, FieldState는 그 트리를 감싸 플레이어 단위 필드 상태를 표현합니다. 이 클래스는 초기 설계를 한 번 바로잡은 부분입니다.
+
+처음에는 `FieldState`를 façade로 의도했지만, 실제로는 `GetFieldTree()`로 내부 `FieldTree`를 그대로 반환하고 있었습니다. 래퍼가 자기 내부 객체를 외부에 넘기는 순간 캡슐화는 이름뿐이 됩니다. 트리를 받은 쪽은 무엇이든 할 수 있고, 실제로 대부분의 시스템이 `FieldState`를 건너뛰고 raw FieldTree를 직접 조작했습니다. `FieldState` 자신의 메서드는 호출되지 않는 죽은 코드가 됐습니다.
+
+```csharp
+// Before
+        public FieldTree GetFieldTree()
+        {
+            return PlayerFieldTree;
+        }
+```
+
+원인은 같은 도메인의 `DeckState`와 비교했을 때 분명해졌습니다. `DeckState`는 내부 `DeckCollection`을 `private`으로 끝까지 숨겨, 누구도 자료구조에 직접 닿지 못하게 합니다. 두 클래스가 같은 의도(State가 자료구조를 감싼다)였는데, 한쪽만 그 의도를 지키고 있었던 것입니다.
+
+그래서 `FieldState`를 진짜 façade로 재설계했습니다. `GetFieldTree()`를 제거해 `FieldTree`를 완전히 내부로 숨기고, 호출자에게 실제로 필요한 연산만 의도가 드러나는 메서드로 노출했습니다. `GameState`에서도 raw 트리를 넘기던 `GetFieldTreeById()`를 걷어내고 `GetFieldStateById()`로 경로를 일원화했습니다. 이제 필드 조작은 반드시 `FieldState`를 거치며, `DeckState`와 캡슐화 수준이 대칭을 이룹니다.
+
+이렇게 다시금 리팩토링을 하는 과정에서, *래퍼 계층은 "존재 이유"를 벌어야 한다. 내부 객체를 그대로 반환하는 래퍼는 아무것도 보호하지 못한다. State는 자료구조를 숨기고, 외부에는 의도가 드러나는 좁은 API만 줄 때 비로소 façade가 된다.* 라는 중요한 사실을 학습할 수 있었습니다.
+
+현재는 이와 연계된 모든 코드를 수정 및 관련 오류를 해결했습니다.
+
+##### [`Phase.cs`](./Scripts/Domain/Enums/Phase.cs)
+> 메인/서브 페이즈 열거형 정의
+
+플레이어는 게임에서 크게 3개의 페이즈를 가집니다.
+
+- `StandBy`: 턴이 돌아오기를 기다리는 상태
+- `Draw`: 카드 가져오기 단계
+- `Play`: 카드 내려놓기 단계
+
+```csharp
+        public enum Main
+        {
+            StandBy,
+            Draw,
+            Play,
+        }
+```
+
+`Draw`는 다시 다음과 같이 3개의 상태를 가집니다.
+- `StandBy`: 플레이어의 입력을 기다리는 상태
+- `Draw`: 덱에서 카드를 가져옴
+- `Trade`: 교역소에서 카드를 가져옴
+
+`Play`는 카드를 내려놓거나 뒤집을 수 있는 공통 상태인 `Play` 상태만을 가집니다.
+
+##### [`PhaseState.cs`](./Scripts/Domain/State/PhaseState.cs)
+> 메인/서브 페이즈 값
+
+플레이어의 Phase는 앞선 `Phase.cs` 내부의 enum들을 바탕으로 `PhaseState`에서 관리합니다. 페이즈 시스템의 골조는 보드게임에서 가져왔습니다. 특히 '엘드리치 호러'라는 게임을 팀원들과 플레이하며, 설명서를 여러 번 읽으며 기반을 다졌습니다.
+
+물론 이 프로젝트는 엘드리치 호러를 비롯한 여타 보드게임과 다르게 페이즈가 복잡하지 않습니다. 하지만 추후 확장성과 페이즈 자체에 영향을 주는 카드도 존재함에 따라, `MainPhase.SubPhase` 형태로 접근이 가능하도록 — `GameState`를 비롯한 게임의 System이 플레이어의 현재 동작을 이 페이즈로 구분할 수 있도록 구현했습니다.
+
+`PhaseState`의 한 인스턴스는 *현재 페이즈*를 `(Main, Sub)` 좌표 하나로 표현합니다. 가령 지금이 Draw 단계의 Trade 스텝이라면 내부적으로 `Main = Draw, Sub = 2`로 다뤄집니다.
+
+`PhaseState`는 `class`가 아니라 **`readonly struct`** 입니다. 값 타입이라 가볍고, 불변이라 페이즈를 바꾸려면 새 인스턴스로 교체해야 합니다. 의도치 않은 수정이 일어날 여지를 구조적으로 차단했습니다.
+
+```csharp
+// 불가능 — 컴파일 에러
+turnState.Phase.Sub = 2;
+
+// 가능 — 새 인스턴스로 교체
+turnState.Phase = PhaseState.From(Phase.Draw.Trade);
+```
+
+`Sub`를 enum이 아니라 `int`로 둔 이유는 — 단계마다 하위 스텝의 enum 타입이 다르기 때문입니다. `Phase.Draw`(StandBy/Draw/Trade)와 `Phase.Play`(Play)는 서로 다른 타입이라 한 필드에 같이 담을 수 없었습니다. 그래서 두 enum의 공통 표현인 `int`로 통합하고, 외부에서 `PhaseState`를 만드는 길은 `From` 메서드 오버로딩으로만 열어 잘못된 값이 들어올 길을 입구에서 막았습니다.
+
+```csharp
+public static PhaseState From(Phase.Draw step) => new PhaseState(Phase.Main.Draw, (int)step);
+public static PhaseState From(Phase.Play step) => new PhaseState(Phase.Main.Play, (int)step);
+```
+
+생성자는 `private`이라 외부에서 `new PhaseState(...)`를 직접 호출할 수 없고, 다음 세 경로만 허용됩니다.
+
+```csharp
+PhaseState.StandBy                       // (Main=StandBy, Sub=-1)
+PhaseState.From(Phase.Draw.Trade)        // (Main=Draw,   Sub=2)
+PhaseState.From(Phase.Play.Play)         // (Main=Play,   Sub=0)
+```
+
+`From`은 인자의 enum 타입으로 `Main`을 자동 결정합니다 — `Phase.Draw`를 넘기면 Main=Draw, `Phase.Play`를 넘기면 Main=Play. 호출자는 `Main`을 명시할 필요가 없고, `(Main=Draw, Sub=Phase.Play.Play값)` 같은 모순된 조합은 만들 길이 없습니다.
+
+`StandBy`는 하위 스텝이 없으므로 `Sub = -1`을 센티넬로 사용합니다.
+
+`PhaseState`는 빈번하게 비교됩니다. 자연스러운 `==` 사용과 `Dictionary` 키 활용을 위해 비교 메서드들을 직접 구현했습니다.
+
+```csharp
+public bool Equals(PhaseState other) => Main == other.Main && Sub == other.Sub;
+public override int GetHashCode() => HashCode.Combine(Main, Sub);
+public static bool operator ==(PhaseState a, PhaseState b) => a.Equals(b);
+public static bool operator !=(PhaseState a, PhaseState b) => !a.Equals(b);
+```
+
+마지막으로, `PhaseState`는 *"지금 어디인가"* 만 표현할 뿐 페이즈를 *전환*하는 책임은 `PhaseSystem`에 있습니다. 도메인 데이터와 시스템 로직의 분리 원칙을 일관되게 따랐습니다.
+
+부수효과로, `Sub`가 이미 `int`라 `NetworkGameController`가 `SyncVar`로 페이즈를 전 클라이언트에 보낼 때 `(Main, Sub)`를 두 `int`로 그대로 쪼개 보낼 수 있습니다.
+
+##### [`TurnState.cs`](./Scripts/Domain/State/TurnState.cs)
+> 활성 플레이어·라운드·턴 순서
+
+'자신의 턴'이 활성화된 플레이어, 현재 라운드, 턴 순서를 보관하는 클래스입니다. 대부분은 단순 상태값이지만, RemainingCycles 하나에는 설계 판단이 담겨 있습니다.
+
+이 게임은 보드게임을 베이스로 해 '행동의 반복'이 잦습니다 — "카드 가져오기를 n번 반복", "교역을 한 번 더 진행" 같은 카드 효과가 많습니다. 초기에는 이를 게임 `Phase`를 되돌리는 방식으로 구현했는데, 페이즈가 꼬이고 드로우·교역이 막히며 라운드 카운팅 버그가 반복됐습니다. 원인은 하나였습니다. `Phase`는 "턴 안에서 지금 어디인가" 를 나타내는 값인데, 거기에 "턴을 몇 번 더 반복하는가" 라는 별개의 개념까지 떠맡긴 것이었습니다. 한 메커니즘이 두 책임을 겸하니 충돌이 났습니다.
+
+그래서 반복 횟수를 `RemainingCycles`라는 독립된 값으로 분리했습니다. 한 턴에 수행 가능한 사이클(Draw → Play)이 몇 번 남았는지를 뜻하며, 표준은 1회, Stonehenge 같은 효과가 이 값을 늘립니다. 이제 `Phase`는 "턴 내 위치"만, `RemainingCycles`는 "반복"만 책임지므로 두 로직이 서로 간섭하지 않습니다. 이 분리는 뒤에 설명할 DrawRule과도 잘 맞물립니다.
+
+##### [`GameActionRecord.cs`](./Scripts/Domain/History/GameActionRecord.cs)
+> 행동 로그 - 조건 판정 시 과거 기록 조회용
+
+GameActionRecord 시스템은 라운드별 행동 로그를 보관해, '한 라운드에 N번 무언가 했을 때'라는 조건을 기획자가 JSON으로 표현할 수 있게 합니다. 32번 카드는 'Destroy 1회 이상'을 통해 정상 작동했지만, 31번 카드의 'Trade 3회 이상' 조건은 `GameActionSystem.Trade()`에 `RecordAction` 호출이 빠져 있어 카드가 기획 의도대로 발동하지 않는 상태였습니다. 코드를 점검하며 발견한 갭으로, 한 줄 추가로 해결했습니다.
+
+```csharp
+if (selected != null)
+{
+    CardMovementSystem.MoveCard(_gameState, selected.InstanceId, player, Zone.Hand, CardStatus.Hand);
+    _gameState.RecordAction(player, ActionType.Trade, targetPlayer: null, cardId: selected.CardId);  // ← 추가
+    Debug.Log($"[Trade] {selected.BaseData.Name} 교역 완료");
+}
+```
+
+##### [`DrawRule.cs`](./Scripts/Domain/Policies/DrawRule.cs)
+> 드로우 방식 정책(표준/지정 등)
+
+`Chapter 1`에서 설명하는 코드 중, Phase 시스템과 더불어 가장 공들여 만든 코드입니다. 초기 제작 단계에서 Effect 효과를 구현하는 과정에서 가장 어려웠던 것은 게임의 순서와 엮인 카드의 효과를 해결하는 것이었습니다. 앞선 Phase에서 보면 Draw Phase 다음으로 Play Phase가 진행되는데, 그렇다면 Play Phase에서 '카드 가져오기 단계를 한번 더 진행합니다' 와 같이 '다음 카드 가져오기 단계'를 수정한다면 해당 정보를 조금 더 체계적으로 가져올 필요가 있었습니다. 그렇지 않으면 `GameState`에서 별도로 '이 플레이어만 1회 더 진행해'라고 진행한다면 (초기에는 이렇게 진행했습니다) 예기치 못한 상황으로 필드의 페이즈와 턴 시스템이 꼬여버려 **한 플레이어의 턴이 무한히 반복되거나 '선택'이라는 개념의 드로우/교역이 멈춰버리는 현상이 지속적으로 발생했습니다.**
+
+이를 해결하기위해 여러 방법을 모색하던 중, OOP의 기초를 다시금 머릿속으로 생각해보았습니다. 답은 간단했습니다. 복잡한 Draw 로직 자체를 클래스로 만들어서, Rule로 설계하고 턴이 시작될 때 System이 플레이어의 DrawRule을 읽게해서 관리한다면? 이 과정에서 '카드 가져오기 단계를 생략하고 신도가 n인 카드를 뽑는다'와 같이, 플레이어의 선택을 스킵하고 원하는 로직을 진행시킬 수 있게 구성하였습니다.
+
+```csharp
+        public static DrawRule Standard => new DrawRule
+        {
+            Type = DrawType.Draft,
+            SkipSelection = false,
+            Amount = 3,
+            CardCondition = null
+        };
+```
+
+##### `RevealReason.cs`(./Scripts/Domain/Enums/RevealReason.cs)
+> 카드 공개 호출 사유
+
+카드의 공개 조건을 나타내는 enum입니다. 추후 카드 효과가 추가되면 이곳에 추가 가능합니다. 추후 Effect 관련 로직에서 자주 사용합니다.
+
+##### [`DeterministicTreeLayout.cs`](./Scripts/Domain/Structure/Field/DeterministicTreeLayout.cs)
+> 필드 시각화 및 드롭존 처리
+
+[라인 테스트 영상](https://youtu.be/THyzJLCemfU)
+
+초기 기획 의도는 '마치 나무 뿌리가 무질서하게 뻗어나가는 느낌으로 필드를 채워 넣고, 그걸 멀리서 바라봤을 때의 심미적인 효과'를 요구했습니다. 이에 맞추어 랜덤하게 카드를 생성하면서도 겹치지 않는 로직을 구현했으나, 이는 기각되었고 결국 '정형화된 카드 필드'와 함께 '카드를 놓는 방식에 따라 모양이 바뀌는 구조'로 정립되었습니다.
+
+우선 이를 구현하기 위한 조건을 생각하며, 스스로 대답해보았습니다.
+1. Field는 일정한 간격을 가져야한다.
+   Q. 그럼 Vertical Layout Group을 사용할 수 있을까?
+   A. 안 된다. VLG는 한 줄로 쌓는 1차원 컴포넌트인데, 필드는 한 부모 밑에 자식이 여러 갈래로 펼쳐지는 트리 구조라 표현이 안 된다. 자식이 1명이면 부모 위로 일직선, 2명 이상이면 좌우 대칭... 이런 트리 특유의 배치 규칙은 자동 LayoutGroup으로 흉내 낼 수 없다.
+   그러면? root 카드를 content 영역 중앙에 고정시키고, 그 위로 카드가 추가될 때마다 각 노드의 서브트리 폭을 계산해 일정한 간격으로 깔끔하게 배치되도록 직접 좌표를 결정하면 된다.
+2. 그럼 Tree의 레이아웃은 얼마만큼 '자주' 갱신되어야할까?
+   카드를 내려놓으면 DropZone이 생성되어 '어디에 카드를 놓을 지' 결정해야한다. 이 때, 전체 트리 모양이 어떻게 변경되는지 미리보기가 되어야한다. -> 기획 의도
+   그럼 Tree가 갱신되는 조건은?
+   - Dropzone 이 생성될 때 -> 다른 주변 모든 카드는, 해당 드롭존에 맞춰서 '넓어'져야함.
+   - 취소해서 카드가 다시 Hand로 돌아오고 DropZone이 사라질때 -> 취소하고 원상복구
+   - DropZone을 선택해서 카드가 해당 위치에 부착될 때 → 슬롯이 사라지고 새 카드 한 장이 남으므로, 미리보기 상태보다는 좁아지고 원래 상태보다는 한 자식 폭만큼 넓어진 모양으로 일관되게 재정렬되어야 함.
+
+그럼 메서드 단위로 이를 분석하고 정리해보겠습니다.
+
+- `CalculatePositions(...)`: 전체 레아아웃 계산을 관리하는 Entry Point입니다. 전달받은 트리를 저장하고, 계산용 딕셔너리를 초기화합니다.
+  - Bottom-Up: `CalculateSubtreeWidth`를 호출, 자식 노드부터 부모 노드 방향으로 각 서브트리가 차지하는 전체 너비를 계산
+  - Top-Down: `AssignPositions`를 호출하여 부모 노드부터 자식 노드 방향으로 실제 좌표를 할당
+  이를 통해, 최종적으로 모든 노드의 좌표가 담긴 딕셔너리를 반환합니다.
+
+- `CalculateSubtreeWidth(int nodeId)`: 특정 노드를 루트로 하는 서브트리(Subtree)가 가로로 얼마만큼의 공간을 차지하는지 재귀적으로 계산합니다.
+  - 자식이 없는 경우(Leaf Node): 자기 자신의 너비(`_cardWidth`)만 반환
+  - 자식이 1명인 경우: 자식 노드 위로 직진해서 올라가므로 자식의 너비를 그대로 가져와 반환
+  - 자식이 2명 이상인 경우: 모든 자식들의 서브트리 너비를 합산하고, 그 사이사이에 들어갈 여백 `_paddingX`을 더한 총합을 자신의 너비로 결정. 계산된 값은 추후 재연산을 막기 위해 `_subtreeWidths` 캐시에 저장
+
+- `AssignPositions(int nodeId, Vector2 pos)`: 앞서 계산된 서브트리 너비 데이터를 바탕으로, 각 노드의 최종 2D 좌표를 부여합니다.
+  - 현재 노드(`nodeId`)에 전달받은 좌표(`pos`)를 최종 타겟 좌표로 저장
+    - 자식이 1명인 경우: 분기할 필요가 없으므로 부모와 동일한 X축을 유지한 채 Y축 방향으로만 이동하여 자식을 배치
+    - 자식이 2명 이상인 경우: 현재 노드에 할당된 전체 공간(`totalWidth`)의 가장 왼쪽 지점(`currentX`)을 계산. 이후 자식들을 순회하며 각 자식이 가진 고유 너비의 '절반' 위치에 중심점을 잡아 균등하고 대칭적으로 자식들을 배치. 하나를 배치할 때마다 `currentX`를 이동시켜 다음 자식의 시작 위치를 갱신.
+
+##### [`UICurvedLine.cs`](./Scripts/Domain/Structure/Field/UICurvedLine.cs)
+> 필드에 존재하는 카드를 연결하는 CurvedLine
+
+카드를 소환했으니, 그 카드가 '연결' 되어있다는 느낌을 주기 위해서는, 이 '트리'가 정상적으로 연결되어있음을 표시하기 위해서는 '선'이 필요합니다. 이 선은 '곡선' 형태여야하고, 부드럽게 연결되어야합니다.
+
+그럼 메서드 단위로 이를 분석하고 정리해보겠습니다.
+
+- `Awake`: 현재 객체의 `RectTransform`을 가져와 크기(`sizeDelta`)를 가로세로 20000이라는 매우 큰 값으로 설정합니다. 이는 UI 요소가 화면 밖으로 나갔다고 판단되어 Unity의 UI 시스템에 의해 렌더링이 잘리는(`Culling`) 현상을 방지하기 위해 강제적으로 설정했습니다.
+
+- `DrawCurve(Vector2 startLocalPos, Vector2 endLocalPos)`: 곡선의 시작점과 끝점을 갱신하고 다시 그리기를 요청하는 메서드입니다. 이전 좌표와 새로 입력된 좌표의 차이(`SqrMagnitude`)가 0.1f 미만이면, 변경 사항이 없다고 판단하여 연산을 취소(`return`)하여 성능을 최적화합니다. 만일 좌표가 변경되었다면, 새로운 점들을 저장하고 `SetVerticesDirty()`를 호출합니다.
+
+- `OnPopulateMesh(VertexHelper vh)`: UI 그래픽의 실제 정점(`Vertex`) 데이터를 구성하는 핵심 메서드입니다. 동작은 다음과 같습니다.
+  1. `vh.Clear()`를 통해 기존 메쉬 데이터를 초기화합니다.
+  2. 곡선을 만들기 위한 4개의 Control Point를 설정합니다.
+     - p0: 시작점
+     - p1: 시작점에서 수직(curveVerticalForce)으로 뻗어 나가는 제어점
+     - p2: 끝점에서 수직 방향 아래로 내려오는 제어점
+     - p3: 끝점
+  3. 이 4개의 점을 바탕으로 설정된 `segments` 개수만큼 반복문을 돌며 곡선 위의 중간 점(Points)들을 계산하여 리스트에 담습니다.
+  4. 계산된 점들을 순회하며 `CreateLineSegment`를 호출해 실제 선분을 그립니다.
+
+- `CalculateCubicBezierPoint(...)`: 3차 베지어 곡선 공식에 따라 진행도 $t$ ($0 \le t \le 1$)에 위치한 2D 좌표를 계산합니다.
+  - $P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$
+
+<img width="10200" height="14039" alt="img007 (2)" src="https://github.com/user-attachments/assets/7bf2432b-7b32-4e6d-982a-a13bbc1da30f" />
+
+~~오랜만에 풀어봐서 즐거웠다~~
+
+- `CreateLineSegment(...)`: 두 개의 점(start, end)을 연결하는 두께를 가진 사각형 메쉬(Quad)를 생성합니다. 각각의 방향 벡터(`direction`)를 구한 뒤, 이를 90도 회전시켜 선분의 두께를 결정할 법선 벡터(`normal`)를 계산합니다. 하나의 선분을 그리기 위해 4개의 정점(Vertex)을 생성합니다. 각 정점의 위치는 중심선에서 법선 벡터를 더하거나 빼서 구하고, 텍스처 매핑을 위한 UV 좌표와 색상을 할당합니다. 마지막으로 `vh.AddTriangle()`을 두 번 호출하여 4개의 점을 2개의 삼각형으로 이어 사각형(Quad)을 완성합니다.
+
+<img width="760" height="540" alt="법선1" src="https://github.com/user-attachments/assets/2c118bfa-9f77-49c2-a60a-dbea9431555a" />
+
+<img width="750" height="560" alt="법선2" src="https://github.com/user-attachments/assets/dcc8a70e-541b-47bc-bf36-6bc5ddceec64" />
+
+[이 Curve Line은 대학생때 배운 Computer Animation에서 Laplician Editing 개념을 상기하며 구성해보았습니다.](https://waterglass0105.tistory.com/67)
