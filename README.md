@@ -146,7 +146,7 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 ### 데이터 흐름 및 통신 방식
 > 다이어그램과 함께, 데이터 흐름 및 통신 방식에 대해 설명하겠습니다.
 
-1. 계층 스택 (정적 구조)
+1. 계층 스택 (코드 간의 의존 관계)
 > 네트워크 코드는 6개의 계층으로 쌓여 있고, 각 계층은 바로 아래만 알기에 Transport 계층만 교체하면 통신 방식 전체가 변경됩니다.
 
 flowchart TD
@@ -165,7 +165,7 @@ flowchart TD
     Fizzy --> SDK
     SDK --> OS
 
-코드의 정적 구조에 대해 먼저 설명하겠습니다. 앞서 설명한 Mirror와 Facepunch의 연장선입니다. 위로 갈수록 게임에 가깝고(고수준, Mirror), 아래로 갈수록 하드웨어에 가깝습니다.(저수준, Transport). 게임 코드는 Mirror만, Mirror는 `Transport` 추상 타입까지만, `FizzyFacepunch`는 `Facepunch.Steamworks`까지만 알고 그 아래는 알지 못합니다. 이러한 분리를 통해 `Transport` 자리에 무엇을 꽂느냐에 따라 통신 방식이 결정됩니다.
+코드의 정적 구조에 대해 먼저 설명하겠습니다. 앞서 설명한 Mirror와 Facepunch의 연장선입니다. 위로 갈수록 게임에 가깝고(고수준, Mirror), 아래로 갈수록 하드웨어에 가깝습니다.(저수준, Transport). 게임 코드는 Mirror만, Mirror는 `Transport` 추상 타입(Transport라는 약속, 인터페이스!)까지만, `FizzyFacepunch`는 `Facepunch.Steamworks`까지만 알고 그 아래는 알지 못합니다. 이러한 분리를 통해 `Transport` 자리에 무엇을 꽂느냐에 따라 통신 방식이 결정됩니다.
 
 이 프로젝트에서는 이러한 `Transport`의 방식을 이용하여 FizzyFacepunch(Steam P2P)와 kcp2k(IP/로컬) 모두를 지원하고 있습니다.
 
@@ -187,7 +187,7 @@ flowchart TD
     P2P --> Spawn
     Brain -.- Spawn
 
-각 PC는 독립적으로 부팅하여 `SteamClient.Init`으로 Steam에 인증하고 각자의 SteamID를 얻습니다. 이후 모든 연결의 *주소*는 **IP가 아닌 SteamID**로 설정됩니다. 호스트는 SteamMatchmaking.CreateLobbyAsync(3)로 로비를 만들고, StartHost()로 Mirror를 호스트 모드(서버+플레이어 겸임)로 띄웁니다. 이 시점에 Mirror가 자동으로 호출하는 OnStartServer() 콜백이 두 단계로 작동합니다.
+각 PC는 독립적으로 부팅하여 `SteamClient.Init`으로 Steam에 인증하고 각자의 SteamID를 얻습니다. 이후 모든 연결의 *주소*는 **IP가 아닌 SteamID**로 설정됩니다. 호스트는 SteamMatchmaking.CreateLobbyAsync(3)로 로비를 만들고, StartHost()로 Mirror를 호스트 모드(서버+플레이어 겸임)로 띄웁니다. 이 시점에 Mirror가 자동으로 호출하는 OnStartServer() 콜백이 두 단계로 작동합니다. (이런 On... 이름들은 Mirror가 특정 시점에 자동으로 불러주는 콜백 함수입니다.)
 
  1. `GameNetworkManager.OnStartServer()`가 `NetworkGameController`를 스폰
  2. 스폰된 `NetworkGameController` 자신의 `OnStartServer()`가 `InitializeServerLogic()`을 호출해 서버에만 존재할 게임의 실질적 두뇌(`GameState`·`시스템`·`이펙트 등록`)를 생성
