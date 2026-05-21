@@ -971,3 +971,230 @@ flowchart TD
 **JSON 데이터가 `EffectRegistry`에 한 번 캐시**되어 있고, **외부에서 트리거가 들어오면** `Effects.Core`의 엔진이 받아서 **`cmd` 이름에 맞는** `Effects.Commands`로 명령을 떠넘깁니다. `If`처럼 조건 평가가 필요한 명령일 때만 `Effects.Conditions`로 한 단계 더 이어집니다.
 
 그러면 이제, 그 JSON 구조가 실제로 어떻게 생겼는지 자세히 풀어 보겠습니다.
+
+##### JSON 데이터 구조
+
+> 이 부분에서 다루는 패턴들 Command/Registry/Resolver는 처음 접하는 개념이었고, 학습 과정에서 AI의 도움을 많이 받았습니다. 다만 이 프로젝트에서 게임에 어떤 트리거와 명령이 필요한지, `amount` 자리에 어떤 형태가 들어와야 실제 카드 효과들을 표현할 수 있는지는, 기획서를 읽고 카드를 한 장 한 장 분류해가며 직접 정리했습니다.
+
+###### 3단 구조: `cardId → trigger → commands`
+
+[`cardsEffects.json`](./Assets/StreamingAssets/effects/cardsEffects.json)의 최상위는 단순한 맵입니다.
+
+```json
+{
+  "1": {
+    "OnReveal": [
+      { "cmd": "SetNextDraw", "amount": 2, "skipSelection": true, "where": { "cultist": 1 } }
+    ]
+  },
+  "3": {
+    "OnReveal": [
+      { "cmd": "AddTurnCycle", "amount": 1 }
+    ]
+  }
+}
+```
+
+- **1단**: 카드 ID. JSON 키는 문자열이라 `"1"`처럼 저장됩니다.
+- **2단**: 트리거 이름. 한 카드가 여러 트리거를 가질 수 있습니다 (예: `OnRevealCost`에서 비용을 받고 `OnReveal`에서 효과 실행).
+- **3단**: 명령 배열. 위에서 아래로 순차 실행됩니다.
+
+이 구조 하나로 "카드 N번이 *언제* *무엇을* 하는가"가 전부 표현됩니다.
+
+위 예시 1번과 3번을 풀어 읽으면 다음과 같습니다.
+
+**1번 카드**
+- `OnReveal`: 이 효과가 *언제* 발동되는지. 카드가 공개되는 시점에 작동합니다.
+- `cmd`: *무엇을* 할지. `SetNextDraw`(다음 드로우 규칙을 바꾸는 명령)을 수행합니다.
+- 뒤따라오는 `amount`, `skipSelection`, `where`는 그 명령의 파라미터입니다.
+  - 이를 정리해보면 '다음 카드 가져오기 단계를 생략하고, 신도가 1인 카드 2장을 뽑는다' 라는 효과가 됩니다.
+
+---
+
+###### 트리거 7종 — *언제* 발화되는가
+
+| 트리거 | 발화 시점 |
+| :--- | :--- |
+| `OnHand` | 손에 카드가 들어왔을 때 (드로우/교역 직후) |
+| `OnReveal` | 신도 카드가 공개되어 앞면이 됐을 때 |
+| `OnRevealCost` | `OnReveal` 직전 — 비용(예: `Sacrifice`)을 받는 단계. 비용을 못 내면 `ctx.Cancelled = true`로 공개 자체가 취소됨 |
+| `OnClick` | 앞면 카드를 클릭해 효과를 능동적으로 사용했을 때 (토페트) |
+| `OnDestroyed` | 카드가 파괴/추방됐을 때 |
+| `RevealCondition` | 공개 *가능 여부*를 판정하는 조건. 다른 트리거와 달리 명령이 아닌 **조건 객체 배열**이 들어감 |
+| `Passive` | 상시 효과 — 상태가 바뀔 때마다 재평가됨 |
+
+`GameActionSystem`의 각 액션(`Reveal`/`Play`/`Destroy` 등)이 끝나는 지점에서 `EffectRunner`가 해당 카드의 해당 트리거 배열을 꺼내 실행합니다. 트리거가 비어 있으면(또는 카드 ID 자체가 JSON에 없으면) 아무 일도 일어나지 않습니다. 이를 통해 *효과 없는 카드*도 동일한 경로로 자연스럽게 처리됩니다.
+
+---
+
+###### 명령: `Command`
+
+1. 역할
+JSON 효과 스크립트의 한 줄을 실행하는 단위입니다. `"cmd": "Draw"`처럼 이름이 붙어 있고, 코드 쪽에는 `ICommand` 인터페이스를 구현한 클래스가 그 이름에 매칭됩니다. `EffectRunner`는 `cmd` 문자열을 보고 적절한 핸들러를 찾아 `ExecuteAsync`를 호출하기만 합니다.
+
+2. JSON 형태
+```json
+{ "cmd": "<명령 이름>", ...명령별 파라미터 }
+```
+   - cmd: 어떤 명령인지 식별하는 이름. Draw, Destroy, If, SetVar 등.
+   - 나머지 필드: 명령마다 다름 (예: Draw는 amount, Destroy는 from/amount/selectionType 등).
+
+3. 사용 예시
+
+```json
+"OnReveal": [
+  { "cmd": "Draw", "amount": 2 },
+  { "cmd": "Log",  "msg": "두 장 드로우 완료" }
+]
+```
+위에서 아래로 순서대로 실행됩니다. 코드 쪽에서는 `EffectsBootstrap`이 `Commands.Register("Draw", new DrawCommand(...))` 형태로 이름과 핸들러를 1:1로 연결합니다. 새 명령을 추가하고 싶으면 `ICommand`를 구현한 클래스를 만들고 `Register` 한 줄만 추가하면 끝입니다.
+
+---
+
+###### 파라미터: `amount`
+
+1. 역할
+"몇 장 / 몇 회"를 지정하는 파라미터입니다. 대부분의 카드 명령(`Draw`, `Destroy`, `Exile`, `Sacrifice` 등)이 공통으로 사용합니다. 가장 기본은 정수 하나, 그리고 "0~2장 사이" 같은 범위입니다.
+
+2. JSON 형태
+```json
+"amount": <int | range>
+```
+
+- 정수 리터럴 — `"amount": 2`
+- 범위 — `"amount": { "min": 0, "max": 2 }` (Manual 선택에서 "0~2장 골라라" 용도)
+
+해석은 `ValueResolver.ResolveAmountRange`가 담당합니다. 정수면 (n, n), 범위면 (min, max)로 환원됩니다.
+
+> `amount` 자리에는 정수 외에도 **변수나 게임 상태에서 계산한 값**을 넣을 수 있습니다. 이 형태(`IntExpr`)는 다음 절에서 함께 다룹니다.
+
+3. 사용 예시
+```json
+{ "cmd": "Destroy",
+  "amount": { "min": 0, "max": 2 },
+  "selectionType": "Manual",
+  "from": { "owner": "Opponent", "zone": "Field" } }
+```
+
+상대 필드 카드 중에서 최대 2장까지 골라 파괴. 0장에서 멈춰도 됩니다 (`min: 0`).
+
+---
+
+###### 변수와 정수 식: `SetVar` / `IntExpr`
+
+1. 역할
+
+다음과 같은 카드를 생각해봅시다.
+
+> **"내가 가진 6번 카드 수만큼 뽑고, 그게 3장 이상이면 그만큼 파괴한다."**
+
+이 효과를 JSON으로 적으려면 **같은 숫자**가 세 자리에 들어가야 합니다.
+
+- `Draw`의 `amount`: 몇 장 뽑을지
+- `Compare`의 `lhs`: 3과 무엇을 비교할지
+- `Destroy`의 `amount`: 몇 장 파괴할지
+
+그런데 그 숫자는 **게임 도중에 결정**됩니다. "내가 6번 카드를 몇 장 가지고 있는가"는 카드를 만드는 *지금*은 알 수가 없으니까요.
+
+즉, "한 번 계산해서 이름을 붙여놓고, 필요한 자리에서 꺼내 쓰자"는 발상이 `SetVar`입니다. JSON 안에서 쓸 수 있는, **그 효과의 한 번의 발동 동안에만 생성되는 지역 변수**라고 생각하면 됩니다.
+
+2. JSON 형태
+
+```json
+{ "cmd": "SetVar", "name": "n", "value": <IntExpr> }
+```
+
+- `name`: 변수 이름. 위 예시에서는 `"n"`을 씁니다.
+- `value`: 그 변수에 저장할 값. 자세한 형태는 아래 `IntExpr`을 참조하세요.
+
+3. `IntExpr` — 정수가 들어가는 자리의 공통 어휘
+
+JSON에는 정수가 들어가는 자리가 여럿 있습니다. `amount`, 비교의 `lhs`/`rhs`, 범위의 `min`/`max`, `SetVar`의 `value` 같은 자리들이죠. 이런 자리에는 다음 **세 가지 형태** 중 무엇이든 적을 수 있습니다.
+
+- **정수 리터럴**: `3`과 같은 숫자를 그대로 사용
+- **변수 참조**: `{ "var": "n" }` 형태로 `SetVar`로 저장해둔 값을 꺼내 옴
+- **인라인 계산**: `{ "type": "cardCount", "from": {...} }` 등 게임 상태에서 즉석 계산.
+
+> 자리마다 다른 규칙을 외울 필요는 없습니다. 어느 자리든 같은 세 형태를 받고, 실제 정수로 환원하는 일은 `ValueResolver.ResolveInt`가 한 곳에서 처리합니다.
+
+인라인 계산의 종류는 다음과 같습니다.
+
+- `cardCount` — 필터를 만족하는 카드 수
+- `playerStat` — 플레이어 스탯 (`cultist`, `strength` 등)
+- `historyCount` — 이번 턴/게임의 액션 횟수
+
+4. 사용 예시
+
+```json
+"OnReveal": [
+  { "cmd": "SetVar", "name": "n",
+    "value": { "type": "cardCount",
+               "from": { "owner":"Self", "zone":"Field",
+                         "filter": { "cardIds": [6] } } } },
+  { "cmd": "Draw", "amount": { "var": "n" } },
+  { "cmd": "If",
+    "condition": { "type":"Compare", "lhs":{"var":"n"}, "op":">=", "rhs":3 },
+    "then": [ { "cmd": "Destroy", "amount": { "var": "n" }, "from": { ... } } ] }
+]
+```
+
+   1. 내 필드의 6번 카드 수를 세어 `n`에 저장
+   2. `n`장 드로우
+   3. `n`이 3 이상이면 `n`장 파괴
+
+---
+
+###### 조건과 분기: `If`
+
+1. 역할
+조건을 평가해서 `then` / `else` 가지 중 하나의 명령 리스트를 실행하는 분기 명령입니다. if 분기 안에 또 다른 `If`를 넣어 중첩도 가능하며, `SetVar`로 미리 계산해둔 값을 조건의 기준으로 활용하는 패턴을 가장 자주 사용하고 있습니다.
+
+2. JSON 형태
+```json
+{
+  "cmd": "If",
+  "condition": { "type": "<조건 이름>", ...조건별 파라미터 },
+  "then": [ ...명령 리스트 ],
+  "else": [ ...명령 리스트 ]
+}
+```
+
+- `condition`: 평가할 조건. `type`으로 어떤 조건인지 식별하며, 코드 쪽에는 `ICondition` 구현체가 매칭됩니다.
+- `then`: 조건이 참일 때 실행할 명령 리스트.
+- `else`: 거짓일 때 실행할 명령 리스트 (생략 가능).
+
+현재 등록된 조건 종류
+- `Compare` (두 수치 비교)
+- `HasSymbol`
+- `HasCultist`
+- `HasCard`
+
+> `Compare`의 `lhs`/`rhs`에는 앞 절에서 다룬 **IntExpr**의 어떤 형태든 들어갈 수 있습니다. 변수 참조(`{ "var": "n" }`)가 가장 흔하지만, 인라인 계산(`{ "type": "historyCount", "action": "Trade" }` 등)도 됩니다.
+
+분기 내부의 명령들은 `EffectRunner.RunNodesAsync`로 재귀 실행되므로, `If` 안에 `If`, `If` 안에 `SetVar` 같은 중첩이 자연스럽게 동작합니다!
+
+3. 사용 예시
+```json
+{ "cmd": "If",
+  "condition": { "type": "Compare",
+                 "lhs": { "var": "n" }, "op": ">=", "rhs": 3 },
+  "then": [ { "cmd": "Destroy", "amount": { "var": "n" }, "from": { ... } } ],
+  "else": [ { "cmd": "Log", "msg": "조건 미달, 효과 없음" } ] }
+```
+
+1. 변수 `n`을 가져와서 3과 비교
+2. `n ≥ 3`이면 `n`장 파괴
+3. 아니면 로그만 남기고 종료
+
+---
+
+###### OCP 성립, 추가 확장
+
+이 구조에 새 명령 — 예를 들어 `Heal`(잃은 신도를 회복) — 을 추가한다고 가정하면 필요한 작업은 다음과 같습니다.
+
+1. `Effects/Commands/Resource/HealCommand.cs`를 만들어 `ICommand`를 구현.
+2. `EffectsBootstrap.cs`에 `Commands.Register("Heal", new HealCommand(...))` 한 줄 추가.
+
+`EffectRunner`, `TargetResolver`, `ValueResolver`, 기존 명령들 — **어디에도 손대지 않습니다.** JSON에서 `{ "cmd": "Heal", "amount": 2 }`만 쓰면 그 순간부터 모든 카드가 이 명령을 쓸 수 있습니다.
+
+처음 설계할 때 OCP를 의식하고 짠 건 아닙니다. 기획자가 카드를 늘릴 때마다 기존 코드가 흔들리지 않도록 만들고 싶다는 목표에서 출발해, Command + Registry 패턴을 따라가다 보니 결과적으로 그 모양이 됐습니다. SOLID를 공부하면서 "아, 이게 OCP라는 거였구나" 하고 뒤늦게 이름을 붙일 수 있었던 부분입니다.
