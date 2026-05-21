@@ -1280,3 +1280,88 @@ public static async Task InitializeAsync()
 이렇게 한 번 적재된 뒤에는 게임 내내 같은 `EffectRegistry.Instance`를 공유합니다. 이후 등장할 `EffectRunner`가 트리거를 실행할 때마다 이 딕셔너리에서 명령 배열을 꺼내는 식으로 동작합니다.
 
 `AddTrigger`는 마지막 `KeywordExpander`에서 자세히 설명하겠습니다!
+
+##### [`TriggerContext.cs`](./Scripts/Effects/Core/TriggerContext.cs)
+> 트리거 1회 실행 동안 유지되는 컨텍스트
+
+한 번의 트리거가 실행되는 동안, 그 안의 모든 명령들이 공유하는 컨텍스트입니다. 하나의 트리거가 시작될 때 하나 만들어져서, 그 트리거 안에서 실행되는 모든 명령에 인자로 전달됩니다.
+
+이 개쩌는 컨텍스트 안에 들어 있는 것들:
+
+- `Source`: 효과를 발동시킨 카드 자신.
+- `Actor`: 효과를 발동시킨 플레이어.
+- `Cause`: (선택) 이 효과를 일으킨 다른 카드. (예: "내가 누군가에게 파괴당했을 때 발동"하는 효과라면, 나를 파괴한 카드가 `Cause`가 됩니다.)
+- `Vars`: `SetVar`로 저장한 변수들. `Dictionary<string, int>` 형태입니다.
+- `Cancelled`: 취소 플래그. (누군가 `Cancel` 명령을 실행하면 `true`가 되고, 그 뒤의 명령은 실행되지 않습니다.)
+
+트리거가 끝나면 이 컨텍스트는 버려집니다. 즉, 변수도 취소 플래그도 **다음 트리거에는 영향을 주지 않습니다.** 트리거 한 번이 컨텍스트 한 번입니다.
+
+##### [`CommandRegistry.cs`](./Scripts/Effects/Core/CommandRegistry.cs)
+> "cmd" 문자열 키 → `ICommand` 핸들러 매핑
+
+JSON에는 `"cmd": "Draw"`처럼 명령이 **이름**으로만 적혀 있습니다. 그런데 실제로 동작하는 건 `DrawCommand`라는 C# 클래스의 인스턴스입니다. 이 둘을 연결해주는 딕셔너리이 `CommandRegistry`입니다.
+
+내부는 단순한 `Dictionary<string, ICommand>`입니다. 게임이 시작될 때 `EffectsBootstrap`이 `Register("Draw", new DrawCommand(...))` 형태로 한 번씩 등록해두면, 이후 `EffectRunner`는 `Get("Draw")`로 인스턴스를 꺼내 쓰면 됩니다.
+
+이렇게 딕셔너리 한 곳에 모아두면 두 가지가 좋습니다.
+
+- 새 명령 추가가 쉬워집니다. 새 `ICommand` 클래스를 만들고 `Register` 한 줄만 추가하면 됩니다. 기존 코드는 안 건드립니다.
+- JSON에 등록되지 않은 명령이 들어오면 경고만 남기고 무시합니다. 오타가 있어도 게임이 죽지는 않습니다. (코드는 죽지 않아요... 대가를 치를 뿐...)
+
+##### [`ConditionRegistry.cs`](./Scripts/Effects/Core/ConditionRegistry.cs)
+> "type" 문자열 → ICondition 매핑
+
+`CommandRegistry`의 형제(와썹브로)입니다. 구조도 사용 방식도 같지만, 담는 것이 다릅니다 — 명령(`ICommand`)이 아니라 *조건*(`ICondition`)을 담습니다.
+
+`If` 명령이 등장하는 자리를 떠올려보면 이해가 쉽습니다.
+
+```json
+{ "cmd": "If",
+  "condition": { "type": "Compare", "lhs": ..., "op": ">=", "rhs": 3 },
+  "then": [ ... ] }
+```
+
+JSON에는 `"type": "Compare"`처럼 조건이 **이름**으로 적혀 있고, 실제로 평가하는 코드는 `CompareCondition` 클래스입니다. 이 둘을 연결하는 딕셔너리이 `ConditionRegistry`입니다.
+
+현재 등록된 조건은 4종이며, `EffectsBootstrap`에서 한 번에 모아 등록합니다.
+
+```csharp
+Conditions.Register("Compare",    new CompareCondition());
+Conditions.Register("HasSymbol",  new HasSymbolCondition());
+Conditions.Register("HasCultist", new HasCultistCondition());
+Conditions.Register("HasCard",    new HasCardCondition());
+```
+
+새 조건을 추가하는 비용은 명령과 동일 — 클래스 하나 + `Register` 한 줄. JSON에서 새 `type`을 쓰는 순간부터 `If`에서 사용할 수 있습니다.
+
+##### [`ValueResolver.cs`](./Scripts/Effects/Core/ValueResolver.cs)
+> JSON 동적 값(변수·카드 수 등)을 정수로 해석
+
+앞 JSON 절의 `IntExpr` 설명에서 "정수 자리에 들어올 수 있는 세 가지 형태(정수 리터럴 / 변수 참조 / 인라인 계산)"를 다뤘는데, **그 세 가지를 실제로 정수 하나로 환원해주는 함수**가 여기에 있습니다.
+
+`ResolveInt`는 받은 JSON 토큰의 모양을 보고 분기합니다.
+
+- 정수면 그대로 반환.
+- `{ "var": "n" }`이면 `TriggerContext.Vars["n"]`을 꺼내 반환.
+- `{ "type": "cardCount", "from": {...} }`이면 `TargetResolver`에게 카드 목록을 요청하고 그 개수를 반환.
+- `{ "type": "playerStat", "stat": "..." }`이면 `IEffectGameState`에서 스탯을 가져와 반환.
+
+이 외에 `ResolveAmountRange`라는 함수도 있어서, `{ "min": 0, "max": 2 }` 같은 범위 표현을 (min, max) 형태로 풀어줍니다.
+
+이 변환기 하나가 있기 때문에 `DrawCommand`나 `DestroyCommand` 같은 명령들은 amount 자리에 무엇이 들어오든 **JSON 모양에 신경 쓸 필요가 없습니다.** "정수 하나 달라"고 요청하면 정수가 옵니다.
+
+// 코드 추가중 ---------------------------------------------------
+
+##### [`EffectRunner.cs`](./Scripts/Effects/Core/EffectRunner.cs)
+> 이펙트 트리거 실행 진입점
+
+여기까지 등장한 부품들, `EffectRegistry`(JSON 캐시), `TriggerContext`(실행 컨텍스트), `CommandRegistry` / `ConditionRegistry`(이름→핸들러 딕셔너리), `ValueResolver` / `TargetResolver`(JSON 토큰을 실제 값·카드로 환원하는 도우미)를 **하나로 묶어 실제 트리거를 실행하는 조립자**가 `EffectRunner`입니다. 카드 효과 시스템의 진입점이자, 외부 시스템(예: `GameActionSystem`)이 *유일하게 호출하는* 클래스입니다.
+
+처리 순서는 단순합니다.
+
+1. `EffectRegistry`에서 해당 카드와 트리거 이름에 해당하는 명령 배열을 꺼냅니다.
+2. `TriggerContext`를 만듭니다 (Source/Actor/Cause/초기 변수까지 채워서).
+3. 명령 배열을 위에서 아래로 한 줄씩 읽으며, 각 줄의 `"cmd"` 문자열을 보고 `CommandRegistry`에서 해당 핸들러를 찾아 실행시킵니다.
+4. 모든 명령이 끝나면 `GameRuleSystem`에게 "승패/탈락 조건을 다시 확인해달라"고 알립니다.
+
+`EffectRunner` 자신은 **개별 명령이 무엇을 하는지 모릅니다.** `Draw`가 실제로 어떤 일을 하는지, `Destroy`가 어떤 일을 하는지에 대한 지식은 각 명령 클래스의 몫이고, `EffectRunner`는 그저 `cmd` 이름을 보고 해당 핸들러에게 떠넘기는 역할만 합니다. 이 분리 덕분에 새 명령을 추가해도 `EffectRunner`는 한 줄도 안 바뀝니다!!! 앞 절의 OCP가 코드 단에서 그대로 실현되는 지점입니다. (끼얏호우)
