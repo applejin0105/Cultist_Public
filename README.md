@@ -1334,6 +1334,7 @@ Conditions.Register("HasCard",    new HasCardCondition());
 
 새 조건을 추가하는 비용은 명령과 동일 클래스 하나 + `Register` 한 줄. JSON에서 새 `type`을 쓰는 순간부터 `If`에서 사용할 수 있습니다.
 
+
 ##### [`ValueResolver.cs`](./Scripts/Effects/Core/ValueResolver.cs)
 > JSON 동적 값(변수·카드 수 등)을 정수로 해석
 
@@ -1349,22 +1350,6 @@ Conditions.Register("HasCard",    new HasCardCondition());
 이 외에 `ResolveAmountRange`라는 함수도 있어서, `{ "min": 0, "max": 2 }` 같은 범위 표현을 (min, max) 형태로 풀어줍니다.
 
 이 변환기 하나가 있기 때문에 `DrawCommand`나 `DestroyCommand` 같은 명령들은 amount 자리에 무엇이 들어오든 **JSON 모양에 신경 쓸 필요가 없습니다.** "정수 하나 달라"고 요청하면 정수가 옵니다.
-
-// 코드 추가중 ---------------------------------------------------
-
-##### [`EffectRunner.cs`](./Scripts/Effects/Core/EffectRunner.cs)
-> 이펙트 트리거 실행 진입점
-
-여기까지 등장한 부품들, `EffectRegistry`(JSON 캐시), `TriggerContext`(실행 컨텍스트), `CommandRegistry` / `ConditionRegistry`(이름→핸들러 딕셔너리), `ValueResolver` / `TargetResolver`(JSON 토큰을 실제 값·카드로 환원하는 도우미)를 **하나로 묶어 실제 트리거를 실행하는 조립자**가 `EffectRunner`입니다. 카드 효과 시스템의 진입점이자, 외부 시스템(예: `GameActionSystem`)이 *유일하게 호출하는* 클래스입니다.
-
-처리 순서는 단순합니다.
-
-1. `EffectRegistry`에서 해당 카드와 트리거 이름에 해당하는 명령 배열을 꺼냅니다.
-2. `TriggerContext`를 만듭니다 (Source/Actor/Cause/초기 변수까지 채워서).
-3. 명령 배열을 위에서 아래로 한 줄씩 읽으며, 각 줄의 `"cmd"` 문자열을 보고 `CommandRegistry`에서 해당 핸들러를 찾아 실행시킵니다.
-4. 모든 명령이 끝나면 `GameRuleSystem`에게 "승패/탈락 조건을 다시 확인해달라"고 알립니다.
-
-`EffectRunner` 자신은 **개별 명령이 무엇을 하는지 모릅니다.** `Draw`가 실제로 어떤 일을 하는지, `Destroy`가 어떤 일을 하는지에 대한 지식은 각 명령 클래스의 몫이고, `EffectRunner`는 그저 `cmd` 이름을 보고 해당 핸들러에게 떠넘기는 역할만 합니다. 이 분리 덕분에 새 명령을 추가해도 `EffectRunner`는 한 줄도 안 바뀝니다!!! 앞 절의 OCP가 코드 단에서 그대로 실현되는 지점입니다. (끼얏호우)
 
 ##### [`TargetResolver.cs`](./Scripts/Effects/Core/TargetResolver.cs)
 > 카드 후보 풀 구성 + 최종 타겟 선택(Manual/Auto)
@@ -1549,3 +1534,17 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 `Resolve`가 JSON `from` 객체를 받는다면, 이쪽은 `Player`를 이미 들고 있는 코드 호출자(예: `DrawCommand`)를 위한 형태입니다. 둘 다 내부적으로는 `private` 헬퍼 `ApplyZoneAndFilter`를 부릅니다.
 
+
+##### [`EffectRunner.cs`](./Scripts/Effects/Core/EffectRunner.cs)
+> 이펙트 트리거 실행 진입점
+
+여기까지 등장한 부품들, `EffectRegistry`(JSON 캐시), `TriggerContext`(실행 컨텍스트), `CommandRegistry` / `ConditionRegistry`(이름→핸들러 딕셔너리), `ValueResolver` / `TargetResolver`(JSON 토큰을 실제 값·카드로 환원하는 도우미)를 **하나로 묶어 실제 트리거를 실행하는 조립자**가 `EffectRunner`입니다. 카드 효과 시스템의 진입점이자, 외부 시스템(예: `GameActionSystem`)이 *유일하게 호출하는* 클래스입니다.
+
+처리 순서는 단순합니다.
+
+1. `EffectRegistry`에서 해당 카드와 트리거 이름에 해당하는 명령 배열을 꺼냅니다.
+2. `TriggerContext`를 만듭니다 (Source/Actor/Cause/초기 변수까지 채워서).
+3. 명령 배열을 위에서 아래로 한 줄씩 읽으며, 각 줄의 `"cmd"` 문자열을 보고 `CommandRegistry`에서 해당 핸들러를 찾아 실행시킵니다.
+4. 모든 명령이 끝나면 `GameRuleSystem`에게 "승패/탈락 조건을 다시 확인해달라"고 알립니다.
+
+`EffectRunner` 자신은 **개별 명령이 무엇을 하는지 모릅니다.** `Draw`가 실제로 어떤 일을 하는지, `Destroy`가 어떤 일을 하는지에 대한 지식은 각 명령 클래스의 몫이고, `EffectRunner`는 그저 `cmd` 이름을 보고 해당 핸들러에게 떠넘기는 역할만 합니다. 이 분리 덕분에 새 명령을 추가해도 `EffectRunner`는 한 줄도 안 바뀝니다!!! 앞 절의 OCP가 코드 단에서 그대로 실현되는 지점입니다. (끼얏호우)
