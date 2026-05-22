@@ -1548,3 +1548,77 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 4. 모든 명령이 끝나면 `GameRuleSystem`에게 "승패/탈락 조건을 다시 확인해달라"고 알립니다.
 
 `EffectRunner` 자신은 **개별 명령이 무엇을 하는지 모릅니다.** `Draw`가 실제로 어떤 일을 하는지, `Destroy`가 어떤 일을 하는지에 대한 지식은 각 명령 클래스의 몫이고, `EffectRunner`는 그저 `cmd` 이름을 보고 해당 핸들러에게 떠넘기는 역할만 합니다. 이 분리 덕분에 새 명령을 추가해도 `EffectRunner`는 한 줄도 안 바뀝니다!!! 앞 절의 OCP가 코드 단에서 그대로 실현되는 지점입니다. (끼얏호우)
+
+
+##### A. 인터페이스·인프라
+
+##### [`IEffectGameState.cs`](./Scripts/Effects/Core/IEffectGameState.cs)
+> 효과 시스템이 게임 상태와 연결된 유일한 창구
+
+효과 코드는 게임 상태에 읽기는 가능해야 하지만 쓰기는 절대 가능해선 안 됩니다. 그래서 효과 코드가 GameState를 직접 들고 다니지 않고, 그 읽기 메서드만 추린 인터페이스 IEffectGameState를 거쳐서만 접근하게 두었습니다. 이렇게 두면 호스트 권위 모델을 유지하면서도 효과 시스템의 읽기는 확실히 보장됩니다.
+
+```csharp
+        bool IsGameEnded { get; }
+
+        // --- 카드 관련 ---
+        IEnumerable<CardInstance> GetAllCards();
+        CardInstance GetCard(int instanceId);
+        
+        // --- 플레이어 및 스탯 관련 ---
+        IEnumerable<Player> GetAlivePlayers();
+        
+        /// <summary>
+        /// 특정 플레이어의 스탯(cultist, influence, strength 등) 값을 조회한다.
+        /// </summary>
+        int GetPlayerStat(Player player, string statKey);
+        
+        // --- 턴 및 게임 환경 관련 ---
+        int GetCurrentRound();
+        
+        // --- 행동 이력(History) 관련 ---
+        /// <summary>
+        /// 특정 액션이 발생한 횟수를 조회한다.
+        /// </summary>
+        int GetHistoryCount(Player actor, ActionType type, string scope);
+        
+        // --- 필드 구조(트리) 관련 ---
+        /// <summary>
+        /// 특정 카드의 종파(Sect) 멤버 InstanceId 집합.
+        /// 종파의 정의는 FieldTree.GetSectInstanceIds 참조.
+        /// </summary>
+        HashSet<int> GetSectInstanceIds(CardInstance source);
+```
+
+전부 Get으로만 구성되어 있습니다. 쓰기 메서드는 하나도 없습니다.
+
+"그냥 프로퍼티에 `private set`을 두거나 `readonly` 키워드 쓰면 되지 않나?" 라는 생각이 들 수 있습니다. 다만 `GameState`는 게임이 진행되기 위해서 `AddPlayer`, `RegisterCard`, `RecordAction` 같은 쓰기 메서드가 반드시 있어야 합니다. 누군가는 상태를 바꿔야 게임이 흘러가니까요. 문제는 *"그 쓰기 메서드를 효과 코드한테는 숨기되, 다른 시스템 코드에게는 그대로 노출하고 싶다"*인데, 이걸 가능하게 해주는 게 인터페이스입니다.
+
+효과 코드는 `IEffectGameState` 타입으로 `GameState`를 받습니다. 같은 객체지만 좁은 창을 통해서만 봅니다. 인터페이스에 적힌 `Get*` 메서드는 보이고, 적히지 않은 `AddPlayer` 같은 쓰기 메서드는 컴파일러가 막아줍니다. 사람의 실수를 컴파일러가 잡아주는 구조입니다.
+
+
+##### [`IRandomSource.cs`](./Scripts/Effects/Core/IRandomSource.cs)
+> RNG를 통제 가능한 형태로 가두는 장치
+
+서버 권위의 Seed값 기반 Random을 위해 선언해두었습니다. 모든 RNG는 반드시 이 인터페이스를 거쳐서 사용됩니다.
+
+반 강박적으로 만든 인터페이스입니다. 서버를 처음 배울 때 결정론에 대해서 배웠고, 랜덤 난수를 통제해야 한다는 것이 머릿속에 깊이 각인되어있었습니다.
+
+처음에는 rng를 GameState에서 하나 만들고, 이를 *모든 클래스*에, 랜덤 요소가 조금이라도 들어가는 클래스에 그냥 뿌렸습니다. 그런데 이렇게 하다보니 코드가 중구난방에다가 도저히 통제를 할 수 없었습니다.
+
+그래서, 인터페이스로 통일했습니다. 어디서 무작위가 일어나는지 추적도 용이하게, 인터페이스로 강제하면 모든 무작위가 한 길을 거치니까 로깅·시드 관리가 한 곳에 모이게 되게 구현했습니다.
+
+하지만 지금까지의 코드를 자세히 보게 되면, 사실 이 게임 시스템에서는 호스트만 효과를 실행하므로 호스트-클라이언트 RNG 동기화는 중요하지 않습니다. 하지만 추후 게임에 리플레이도 넣고 싶고, 개발 과정에서 효과가 올바르게 작동하는지 제대로 보기 위한, 미래를 위한 장치로 남겨두었습니다.
+
+##### [`ICommand.cs`](./Scripts/Effects/Commands/ICommand.cs)
+> 모든 카드 효과 명령어의 공통 인터페이스
+
+모든 cmd 효과의 공통 인터페이스입니다. 내부에는 모든 효과가 기본적으로 가져야 할 메서드와 그 파라미터가 깔★끔하게 정리되어있습니다.
+
+##### [`ICondition.cs`](./Scripts/Effects/Conditions/ICondition.cs)
+> 모든 조건의 공통 인터페이스
+
+모든 조건의 공통 인터페이스입니다. ICommand와 정확히 같은 구조로, Evaluate 메서드를 모든 조건 클래스가 반드시 구현하게 합니다.
+
+현재 등록된 조건은 `Compare`, `HasSymbol`, `HasCultist`, `HasCard` 4종이며, 각자 `ICondition`을 직접 구현합니다.
+
+---
