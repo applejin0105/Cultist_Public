@@ -26,11 +26,11 @@
   * Command + Interpreter 패턴 (JSON DSL 카드 효과 시스템)
   * 보조: Registry, State Machine, Event Bus(Observer), Repository
 * Key Libraries:
-  * Mirror — 고수준 네트워킹 (NetworkManager / SyncVar / Command·Rpc)
-  * FizzyFacepunch + Facepunch.Steamworks — Steam P2P 트랜스포트 & 로비/인증
-  * kcp2k — 로컬 IP 트랜스포트 (로컬 멀티플레이 제공)
-  * DOTween / DOTween Pro (Demigiant) — UI·카메라 애니메이션 (Components/Effects)
-  * Newtonsoft.Json — cardDB.json / cardsEffects.json DSL 파싱
+  * Mirror: 고수준 네트워킹 (NetworkManager / SyncVar / Command·Rpc)
+  * FizzyFacepunch + Facepunch.Steamworks: Steam P2P 트랜스포트 & 로비/인증
+  * kcp2k: 로컬 IP 트랜스포트 (로컬 멀티플레이 제공)
+  * DOTween / DOTween Pro (Demigiant: UI·카메라 애니메이션 (Components/Effects)
+  * Newtonsoft.Json: cardDB.json / cardsEffects.json DSL 파싱
   * Unity Input System 1.18.0 / TextMesh Pro / Unity UI (uGUI)
 
 **Tools & Collaboration**
@@ -331,7 +331,7 @@ flowchart TD
 - **수치**: `Cultist`(신도), `Junction`(연결 가능 수), 상징 배열 `SymbolR`/`SymbolG`
 - **규칙 플래그**: `IsRoot`, `IsRevealImmediately`, `IsEcho`, `IsCrisis`, `IsForceSelect`, `IsCollectible` 등
 
-모든 필드는 생성자에서만 채워지고 외부 변경 경로가 없습니다(`{ get; }` 또는 `private` *백킹 필드* — 프로퍼티 뒤에 숨은 실제 변수). 상징 배열도 `Clone()`해서 보관하고 외부에는 `IReadOnlyList<int>`로만 노출합니다 — 외부 코드가 받은 리스트를 휘저어도 원본은 안전합니다.
+모든 필드는 생성자에서만 채워지고 외부 변경 경로가 없습니다(`{ get; }` 또는 `private` *백킹 필드* (프로퍼티 뒤에 숨은 실제 변수)). 상징 배열도 `Clone()`해서 보관하고 외부에는 `IReadOnlyList<int>`로만 노출합니다. 이를 통해 외부 코드가 받은 리스트를 휘저어도 원본은 안전합니다.
 
 `Card`는 카드 *종류*만 표현할 뿐, "이 카드가 지금 누구의 손에 있는가" 같은 런타임 상태는 일절 가지지 않습니다. 그 자리는 다음에 설명할 `CardInstance`가 채웁니다.
 
@@ -371,14 +371,14 @@ flowchart TD
 또한 카드 효과 시스템에는 `GameState` 전체가 아니라 `IEffectGameState` 인터페이스만 노출합니다. 이를 통해 상태를 *읽고 질문*할 수 있어도(`GetPlayerStat`, `GetHistoryCount` 등) 내부 구조에 직접 손대지는 못합니다.
 
 ```csharp
-// 모든 카드의 중앙 등록소 — InstanceId로 O(1) 조회
+// 모든 카드의 중앙 등록소: InstanceId로 O(1) 조회
 private readonly Dictionary<int, CardInstance> _cards = new();
 public IReadOnlyDictionary<int, CardInstance> Cards => _cards;   // 외부엔 읽기 전용 뷰만
 
 public CardInstance? GetCard(int instanceId)
     => _cards.GetValueOrDefault(instanceId);
 
-// 플레이어 상태도 동일 — 내부는 private, 외부는 읽기 전용
+// 플레이어 상태도 동일. 내부는 private, 외부는 읽기 전용
 private readonly List<PlayerState> _players = new();
 public IReadOnlyList<PlayerState> Players => _players;
 ```
@@ -407,10 +407,10 @@ TurnSystem은 GameState에서 턴 주인의 PlayerState를 조회하고, 그 데
 ##### [`DeckCollection.cs`](./Scripts/Domain/Structure/Deck/DeckCollection.cs)
 > 덱 카드 순서를 다루는 LIFO 컬렉션
 
-오직 Deck을 다루는 **LIFO**(*Last In, First Out*; 가장 마지막에 들어간 것이 가장 먼저 나오는 — 스택과 같은 구조) 컬렉션입니다. `IEnumerable<CardInstance>` 인터페이스를 통해 CardInstance들을 foreach로 순회할 수 있다는 계약을 명시하고있습니다. 이를 통해 `DeckCollection`에서 `foreach`를 통해 CardInstance를 호출할 수 있습니다.
+오직 Deck을 다루는 **LIFO**(*Last In, First Out*; 가장 마지막에 들어간 것이 가장 먼저 나오는 스택과 같은 구조) 컬렉션입니다. `IEnumerable<CardInstance>` 인터페이스를 통해 CardInstance들을 foreach로 순회할 수 있다는 계약을 명시하고있습니다. 이를 통해 `DeckCollection`에서 `foreach`를 통해 CardInstance를 호출할 수 있습니다.
 
-    - foreach 사용 가능 — foreach (var c in deck)
-    - LINQ 전체 사용 가능 — .Where(), .Select(), .Count(), .FirstOrDefault(), .Any() … 이 모든 LINQ 메서드는 IEnumerable<T>에 대한 *확장 메서드*(이미 정의된 타입에 새 메서드를 덧붙이는 C# 기능)라서, 구현하는 순간 전부 켜집니다.
+    - foreach 사용 가능: foreach (var c in deck)
+    - LINQ 전체 사용 가능: .Where(), .Select(), .Count(), .FirstOrDefault(), .Any() … 이 모든 LINQ 메서드는 IEnumerable<T>에 대한 *확장 메서드*(이미 정의된 타입에 새 메서드를 덧붙이는 C# 기능)라서, 구현하는 순간 전부 켜집니다.
 
 `DeckCollection`은 이렇게 `CardInstance`들을 LIFO로 관리하고, 카드 게임에서 덱 사용에 필요한 모든 로직을 수행하고 있습니다. 하지만, 게임의 System들에서 이를 직접 호출하고 사용하지 않습니다.
 
@@ -432,7 +432,7 @@ Root 카드를 설정하고, `GameActionSystem`과 `TurnSystem` 그리고 `DrawC
 - 모든 노드는 부모가 하나다
 - `ChildrenInstanceIds` 목록과 실제 부모-자식 관계가 일치해야 한다
 - `Nodes` 딕셔너리(`InstanceId` → `FieldNode`)이 트리 실제 구성과 어긋나면 안 된다
-이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해서 `AddNode`를 다른 동작으로 바꾸면, 이 규칙이 깨지는 순간 이를 읽는 핵심 코드들 — `StatSystem`부터 `NetworkGameController.SyncFullGameState`까지의 모든 계산이 틀린 값을 내게 됩니다. 이걸 입구에서 막기 위해 `sealed`(*이 클래스를 상속하지 못하게 막는 C# 키워드*)로 잠갔습니다. 필드 트리는 앞으로도 다른 변형이 필요할 일이 없으므로, 확장성을 포기하는 대가도 없었습니다.
+이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해서 `AddNode`를 다른 동작으로 바꾸면, 이 규칙이 깨지는 순간 이를 읽는 핵심 코드들, `StatSystem`부터 `NetworkGameController.SyncFullGameState`까지의 모든 계산이 틀린 값을 내게 됩니다. 이걸 입구에서 막기 위해 `sealed`(*이 클래스를 상속하지 못하게 막는 C# 키워드*)로 잠갔습니다. 필드 트리는 앞으로도 다른 변형이 필요할 일이 없으므로, 확장성을 포기하는 대가도 없었습니다.
 
 동일한 이유로, 대부분의 도메인 상태·자료구조의 경우 거의 다 `sealed` 처리해두었습니다.
 
@@ -496,21 +496,21 @@ FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신
 
 플레이어의 Phase는 앞선 `Phase.cs` 내부의 enum들을 바탕으로 `PhaseState`에서 관리합니다. 페이즈 시스템의 골조는 보드게임에서 가져왔습니다. 특히 '엘드리치 호러'라는 게임을 팀원들과 플레이하며, 설명서를 여러 번 읽으며 기반을 다졌습니다.
 
-물론 이 프로젝트는 엘드리치 호러를 비롯한 여타 보드게임과 다르게 페이즈가 복잡하지 않습니다. 하지만 추후 확장성과 페이즈 자체에 영향을 주는 카드도 존재함에 따라, `MainPhase.SubPhase` 형태로 접근이 가능하도록 — `GameState`를 비롯한 게임의 System이 플레이어의 현재 동작을 이 페이즈로 구분할 수 있도록 구현했습니다.
+물론 이 프로젝트는 엘드리치 호러를 비롯한 여타 보드게임과 다르게 페이즈가 복잡하지 않습니다. 하지만 추후 확장성과 페이즈 자체에 영향을 주는 카드도 존재함에 따라, `MainPhase.SubPhase` 형태로 접근이 가능하도록 `GameState`를 비롯한 게임의 System이 플레이어의 현재 동작을 이 페이즈로 구분할 수 있도록 구현했습니다.
 
 `PhaseState`의 한 인스턴스는 *현재 페이즈*를 `(Main, Sub)` 좌표 하나로 표현합니다. 가령 지금이 Draw 단계의 Trade 스텝이라면 내부적으로 `Main = Draw, Sub = 2`로 다뤄집니다.
 
 `PhaseState`는 `class`가 아니라 **`readonly struct`** 입니다. 값 타입이라 가볍고, 불변이라 페이즈를 바꾸려면 새 인스턴스로 교체해야 합니다. 의도치 않은 수정이 일어날 여지를 구조적으로 차단했습니다.
 
 ```csharp
-// 불가능 — 컴파일 에러
+// 불가능: 컴파일 에러
 turnState.Phase.Sub = 2;
 
-// 가능 — 새 인스턴스로 교체
+// 가능: 새 인스턴스로 교체
 turnState.Phase = PhaseState.From(Phase.Draw.Trade);
 ```
 
-`Sub`를 enum이 아니라 `int`로 둔 이유는 — 단계마다 하위 스텝의 enum 타입이 다르기 때문입니다. `Phase.Draw`(StandBy/Draw/Trade)와 `Phase.Play`(Play)는 서로 다른 타입이라 한 필드에 같이 담을 수 없었습니다. 그래서 두 enum의 공통 표현인 `int`로 통합하고, 외부에서 `PhaseState`를 만드는 길은 `From` 메서드 오버로딩으로만 열어 잘못된 값이 들어올 길을 입구에서 막았습니다.
+`Sub`를 enum이 아니라 `int`로 둔 이유는 단계마다 하위 스텝의 enum 타입이 다르기 때문입니다. `Phase.Draw`(StandBy/Draw/Trade)와 `Phase.Play`(Play)는 서로 다른 타입이라 한 필드에 같이 담을 수 없었습니다. 그래서 두 enum의 공통 표현인 `int`로 통합하고, 외부에서 `PhaseState`를 만드는 길은 `From` 메서드 오버로딩으로만 열어 잘못된 값이 들어올 길을 입구에서 막았습니다.
 
 ```csharp
 public static PhaseState From(Phase.Draw step) => new PhaseState(Phase.Main.Draw, (int)step);
@@ -525,7 +525,7 @@ PhaseState.From(Phase.Draw.Trade)        // (Main=Draw,   Sub=2)
 PhaseState.From(Phase.Play.Play)         // (Main=Play,   Sub=0)
 ```
 
-`From`은 인자의 enum 타입으로 `Main`을 자동 결정합니다 — `Phase.Draw`를 넘기면 Main=Draw, `Phase.Play`를 넘기면 Main=Play. 호출자는 `Main`을 명시할 필요가 없고, `(Main=Draw, Sub=Phase.Play.Play값)` 같은 모순된 조합은 만들 길이 없습니다. **즉, '만드는 길'을 좁혀서 잘못된 조합을 만들 수 없게 한 것입니다.**
+`From`은 인자의 enum 타입으로 `Main`을 자동 결정합니다. `Phase.Draw`를 넘기면 Main=Draw, `Phase.Play`를 넘기면 Main=Play. 호출자는 `Main`을 명시할 필요가 없고, `(Main=Draw, Sub=Phase.Play.Play값)` 같은 모순된 조합은 만들 길이 없습니다. **즉, '만드는 길'을 좁혀서 잘못된 조합을 만들 수 없게 한 것입니다.**
 
 `StandBy`는 하위 스텝이 없으므로 `Sub = -1`을 *센티넬*(특별한 의미를 가진 약속된 값; 여기선 -1이 'Sub 없음'을 뜻함)로 사용합니다.
 
@@ -547,7 +547,7 @@ public static bool operator !=(PhaseState a, PhaseState b) => !a.Equals(b);
 
 '자신의 턴'이 활성화된 플레이어, 현재 라운드, 턴 순서를 보관하는 클래스입니다. 대부분은 단순 상태값이지만, RemainingCycles 하나에는 설계 판단이 담겨 있습니다.
 
-이 게임은 보드게임을 베이스로 해 '행동의 반복'이 잦습니다 — "카드 가져오기를 n번 반복", "교역을 한 번 더 진행" 같은 카드 효과가 많습니다. 초기에는 이를 게임 `Phase`를 되돌리는 방식으로 구현했는데, 페이즈가 꼬이고 드로우·교역이 막히며 라운드 카운팅 버그가 반복됐습니다. 원인은 하나였습니다. `Phase`는 "턴 안에서 지금 어디인가" 를 나타내는 값인데, 거기에 "턴을 몇 번 더 반복하는가" 라는 별개의 개념까지 떠맡긴 것이었습니다. 한 메커니즘이 두 책임을 겸하니 충돌이 났습니다.
+이 게임은 보드게임을 베이스로 해 '행동의 반복'이 잦습니다. "카드 가져오기를 n번 반복", "교역을 한 번 더 진행" 같은 카드 효과가 많습니다. 초기에는 이를 게임 `Phase`를 되돌리는 방식으로 구현했는데, 페이즈가 꼬이고 드로우·교역이 막히며 라운드 카운팅 버그가 반복됐습니다. 원인은 하나였습니다. `Phase`는 "턴 안에서 지금 어디인가" 를 나타내는 값인데, 거기에 "턴을 몇 번 더 반복하는가" 라는 별개의 개념까지 떠맡긴 것이었습니다. 한 메커니즘이 두 책임을 겸하니 충돌이 났습니다.
 
 그래서 반복 횟수를 `RemainingCycles`라는 독립된 값으로 분리했습니다. 한 턴에 수행 가능한 사이클(Draw → Play)이 몇 번 남았는지를 뜻하며, 표준은 1회, Stonehenge 같은 효과가 이 값을 늘립니다. 이제 `Phase`는 "턴 내 위치"만, `RemainingCycles`는 "반복"만 책임지므로 두 로직이 서로 간섭하지 않습니다. 이 분리는 뒤에 설명할 DrawRule과도 잘 맞물립니다.
 
@@ -646,7 +646,7 @@ if (selected != null)
   3. 이 4개의 점을 바탕으로 설정된 `segments` 개수만큼 반복문을 돌며 곡선 위의 중간 점(Points)들을 계산하여 리스트에 담습니다.
   4. 계산된 점들을 순회하며 `CreateLineSegment`를 호출해 실제 선분을 그립니다.
 
-- `CalculateCubicBezierPoint(...)`: 3차 베지어 곡선 공식에 따라 진행도 $t$ ($0 \le t \le 1$)에 위치한 2D 좌표를 계산합니다. *네 개의 제어점(p0~p3)이 곡선을 정의합니다 — p0와 p3는 양 끝점, p1과 p2는 곡선이 어느 방향으로 휘어질지를 결정합니다.*
+- `CalculateCubicBezierPoint(...)`: 3차 베지어 곡선 공식에 따라 진행도 $t$ ($0 \le t \le 1$)에 위치한 2D 좌표를 계산합니다. *네 개의 제어점(p0~p3)이 곡선을 정의합니다. p0와 p3는 양 끝점, p1과 p2는 곡선이 어느 방향으로 휘어질지를 결정합니다.*
   - $P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$
 
 <img width="10200" height="14039" alt="img007 (2)" src="https://github.com/user-attachments/assets/7bf2432b-7b32-4e6d-982a-a13bbc1da30f" />
@@ -864,7 +864,7 @@ private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
 원래 의도한 흐름은 *"덱 생성 → 서버에 덱 전송 → 서버에서 검증 → 게임 시작"* 이었습니다. 그런데 `DeckRepository`를 설계하면서 검증을 *덱 편집 시점*에 끝낼 수 있게 되었고, 인게임 진입 흐름은 점점 다음 한 줄로 압축됐습니다.
 
 ```csharp
-// NetworkGameController.StartGameLogic 내부 — 실제 사용되는 경로
+// NetworkGameController.StartGameLogic 내부는 실제 사용되는 경로
 DeckData dData = InGameSessionManager.Instance.GetPlayerDeck(pComp.netId);
 var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
 ```
@@ -892,7 +892,7 @@ var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
 - `EndCurrentPlayerTurnInternal()`: 현재 플레이어의 턴을 종료하는 메인 로직입니다. 턴을 종료하기 위해서는 다음 조건을 만족해야합니다.
   - 패에 카드가 하나도 없을 것
   - 사이클을 모두 마쳤을 것 -> 만약 사이클이 남아있다면 Phase를 `Draw.StandBy`로 초기화
-  그러면 진짜로 턴을 종료하며 `PhaseState.StandBy`로 페이즈를 바꾸고, 다음 플레이어를 탐색합니다. (아직 살아있는 플레이어만 탐색합니다!) 이때, 원형 순회 방식을 사용합니다. 총 4명이면 0 -> 1 -> 2 -> 3 -> 0 형식으로 진행하며, `(nextIndex + 1) % totalPlayers`를 이용했습니다. *`%`는 나머지 연산으로, 인덱스가 인원 수를 넘으면 자동으로 0으로 되돌아가게 합니다 — 원형 순회의 핵심 트릭입니다.* 만약에 모든 플레이어가 사망 상태라면 `do...while`이 무한하게 돌게 되므로, 이를 막기 위해 `loopCount > totalPlayers` 조건으로 총인원수만큼만 탐색하고 강제로 루프를 빠져나옵니다.
+  그러면 진짜로 턴을 종료하며 `PhaseState.StandBy`로 페이즈를 바꾸고, 다음 플레이어를 탐색합니다. (아직 살아있는 플레이어만 탐색합니다!) 이때, 원형 순회 방식을 사용합니다. 총 4명이면 0 -> 1 -> 2 -> 3 -> 0 형식으로 진행하며, `(nextIndex + 1) % totalPlayers`를 이용했습니다. *`%`는 나머지 연산으로, 인덱스가 인원 수를 넘으면 자동으로 0으로 되돌아가게 합니다. 원형 순회에서 자주 사용하는 로직을 그대로 사용했습니다.* 만약에 모든 플레이어가 사망 상태라면 `do...while`이 무한하게 돌게 되므로, 이를 막기 위해 `loopCount > totalPlayers` 조건으로 총인원수만큼만 탐색하고 강제로 루프를 빠져나옵니다.
   그렇게 빠져나오면, `nextIndex <= oldIndex` 조건문을 통해 라운드가 한 바퀴 돌았는지 판단합니다.
     - 정상적인 턴 진행: 인덱스는 항상 증가합니다 (예: `old=1` -> `next=2`). 이 경우 `else`문을 타서 다음 플레이어의 턴을 시작합니다.
     - 라운드 종료: 인덱스가 배열 끝에서 처음으로 돌아갔을 때(가령 `old=3 -> next=0`) 혹은 자신밖에 안 남았을 때(`old=1 -> next=1`), 새 인덱스가 이전 인덱스보다 작거나 같아집니다. 이때는 한 라운드가 끝났음을 의미하므로 `StartNewRound()`를 호출해 턴 순서를 재계산하고 다음 라운드로 넘어갑니다.
@@ -1011,17 +1011,17 @@ flowchart TD
 
 ---
 
-###### 트리거 7종 — *언제* 발화되는가
+###### 트리거: *언제* 발화되는가
 
 | 트리거 | 발화 시점 |
 | :--- | :--- |
 | `OnHand` | 손에 카드가 들어왔을 때 (드로우/교역 직후) |
 | `OnReveal` | 신도 카드가 공개되어 앞면이 됐을 때 |
-| `OnRevealCost` | `OnReveal` 직전 — 비용(예: `Sacrifice`)을 받는 단계. 비용을 못 내면 `ctx.Cancelled = true`로 공개 자체가 취소됨 |
+| `OnRevealCost` | `OnReveal` 직전. 비용(예: `Sacrifice`)을 받는 단계. 비용을 못 내면 `ctx.Cancelled = true`로 공개 자체가 취소됨 |
 | `OnClick` | 앞면 카드를 클릭해 효과를 능동적으로 사용했을 때 (토페트) |
 | `OnDestroyed` | 카드가 파괴/추방됐을 때 |
 | `RevealCondition` | 공개 *가능 여부*를 판정하는 조건. 다른 트리거와 달리 명령이 아닌 **조건 객체 배열**이 들어감 |
-| `Passive` | 상시 효과 — 상태가 바뀔 때마다 재평가됨 |
+| `Passive` | 상시 효과. 상태가 바뀔 때마다 재평가됨 |
 
 `GameActionSystem`의 각 액션(`Reveal`/`Play`/`Destroy` 등)이 끝나는 지점에서 `EffectRunner`가 해당 카드의 해당 트리거 배열을 꺼내 실행합니다. 트리거가 비어 있으면(또는 카드 ID 자체가 JSON에 없으면) 아무 일도 일어나지 않습니다. 이를 통해 *효과 없는 카드*도 동일한 경로로 자연스럽게 처리됩니다.
 
@@ -1061,8 +1061,8 @@ JSON 효과 스크립트의 한 줄을 실행하는 단위입니다. `"cmd": "Dr
 "amount": <int | range>
 ```
 
-- 정수 리터럴 — `"amount": 2`
-- 범위 — `"amount": { "min": 0, "max": 2 }` (Manual 선택에서 "0~2장 골라라" 용도)
+- 정수 리터럴: `"amount": 2`
+- 범위: `"amount": { "min": 0, "max": 2 }` (Manual 선택에서 "0~2장 골라라" 용도)
 
 해석은 `ValueResolver.ResolveAmountRange`가 담당합니다. 정수면 (n, n), 범위면 (min, max)로 환원됩니다.
 
@@ -1107,7 +1107,7 @@ JSON 효과 스크립트의 한 줄을 실행하는 단위입니다. `"cmd": "Dr
 - `name`: 변수 이름. 위 예시에서는 `"n"`을 씁니다.
 - `value`: 그 변수에 저장할 값. 자세한 형태는 아래 `IntExpr`을 참조하세요.
 
-3. `IntExpr` — 정수가 들어가는 자리의 공통 어휘
+3. `IntExpr`: 정수가 들어가는 자리의 공통 어휘
 
 JSON에는 정수가 들어가는 자리가 여럿 있습니다. `amount`, 비교의 `lhs`/`rhs`, 범위의 `min`/`max`, `SetVar`의 `value` 같은 자리들이죠. 이런 자리에는 다음 **세 가지 형태** 중 무엇이든 적을 수 있습니다.
 
@@ -1119,9 +1119,9 @@ JSON에는 정수가 들어가는 자리가 여럿 있습니다. `amount`, 비�
 
 인라인 계산의 종류는 다음과 같습니다.
 
-- `cardCount` — 필터를 만족하는 카드 수
-- `playerStat` — 플레이어 스탯 (`cultist`, `strength` 등)
-- `historyCount` — 이번 턴/게임의 액션 횟수
+- `cardCount`: 필터를 만족하는 카드 수
+- `playerStat`: 플레이어 스탯 (`cultist`, `strength` 등)
+- `historyCount`: 이번 턴/게임의 액션 횟수
 
 4. 사용 예시
 
@@ -1190,12 +1190,12 @@ JSON에는 정수가 들어가는 자리가 여럿 있습니다. `amount`, 비�
 
 ###### OCP 성립, 추가 확장
 
-이 구조에 새 명령 — 예를 들어 `Heal`(잃은 신도를 회복) — 을 추가한다고 가정하면 필요한 작업은 다음과 같습니다.
+이 구조에 새 명령, 예를 들어 `Heal`(잃은 신도를 회복)을 추가한다고 가정하면 필요한 작업은 다음과 같습니다.
 
 1. `Effects/Commands/Resource/HealCommand.cs`를 만들어 `ICommand`를 구현.
 2. `EffectsBootstrap.cs`에 `Commands.Register("Heal", new HealCommand(...))` 한 줄 추가.
 
-`EffectRunner`, `TargetResolver`, `ValueResolver`, 기존 명령들 — **어디에도 손대지 않습니다.** JSON에서 `{ "cmd": "Heal", "amount": 2 }`만 쓰면 그 순간부터 모든 카드가 이 명령을 쓸 수 있습니다.
+`EffectRunner`, `TargetResolver`, `ValueResolver`, 기존 명령들 **어디에도 손대지 않습니다.** JSON에서 `{ "cmd": "Heal", "amount": 2 }`만 쓰면 그 순간부터 모든 카드가 이 명령을 쓸 수 있습니다.
 
 처음 설계할 때 OCP를 의식하고 짠 건 아닙니다. 기획자가 카드를 늘릴 때마다 기존 코드가 흔들리지 않도록 만들고 싶다는 목표에서 출발해, Command + Registry 패턴을 따라가다 보니 결과적으로 그 모양이 됐습니다. SOLID를 공부하면서 "아, 이게 OCP라는 거였구나" 하고 뒤늦게 이름을 붙일 수 있었던 부분입니다.
 
@@ -1265,7 +1265,7 @@ public static async Task InitializeAsync()
 
 | 클라이언트가 효과 데이터를 보는 자리 | 이유 |
 | :--- | :--- |
-| `InGameCardUI` — 공개 시 비용 표시 | 카드를 공개하려고 클릭하기 전에 `OnRevealCost` 트리거 존재 여부를 보고, *서버에 보내기 전에* 비용 카드 UI(황금색 블룸)를 활성화 |
+| `InGameCardUI`: 공개 시 비용 표시 | 카드를 공개하려고 클릭하기 전에 `OnRevealCost` 트리거 존재 여부를 보고, *서버에 보내기 전에* 비용 카드 UI(황금색 블룸)를 활성화 |
 | `EffectValidator` | 효과 JSON 유효성 검증 시 `ClientGameStateProvider`를 통해 검증 흐름에 사용 |
 | `KeywordExpander` (앱 시작 1회) | `[희생: N]` 같은 텍스트 약속어를 `EffectRegistry`에 자동 주입 |
 
@@ -1311,7 +1311,7 @@ JSON에는 `"cmd": "Draw"`처럼 명령이 **이름**으로만 적혀 있습니�
 ##### [`ConditionRegistry.cs`](./Scripts/Effects/Core/ConditionRegistry.cs)
 > "type" 문자열 → ICondition 매핑
 
-`CommandRegistry`의 형제(와썹브로)입니다. 구조도 사용 방식도 같지만, 담는 것이 다릅니다 — 명령(`ICommand`)이 아니라 *조건*(`ICondition`)을 담습니다.
+`CommandRegistry`의 형제(와썹브로)입니다. 구조도 사용 방식도 같지만, 담는 것이 다릅니다. 명령(`ICommand`)이 아니라 *조건*(`ICondition`)을 담습니다.
 
 `If` 명령이 등장하는 자리를 떠올려보면 이해가 쉽습니다.
 
@@ -1332,7 +1332,7 @@ Conditions.Register("HasCultist", new HasCultistCondition());
 Conditions.Register("HasCard",    new HasCardCondition());
 ```
 
-새 조건을 추가하는 비용은 명령과 동일 — 클래스 하나 + `Register` 한 줄. JSON에서 새 `type`을 쓰는 순간부터 `If`에서 사용할 수 있습니다.
+새 조건을 추가하는 비용은 명령과 동일 클래스 하나 + `Register` 한 줄. JSON에서 새 `type`을 쓰는 순간부터 `If`에서 사용할 수 있습니다.
 
 ##### [`ValueResolver.cs`](./Scripts/Effects/Core/ValueResolver.cs)
 > JSON 동적 값(변수·카드 수 등)을 정수로 해석
