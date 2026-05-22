@@ -432,11 +432,11 @@ Root 카드를 설정하고, `GameActionSystem`과 `TurnSystem` 그리고 `DrawC
 - 모든 노드는 부모가 하나다
 - `ChildrenInstanceIds` 목록과 실제 부모-자식 관계가 일치해야 한다
 - `Nodes` 딕셔너리(`InstanceId` → `FieldNode`)이 트리 실제 구성과 어긋나면 안 된다
-이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해서 `AddNode`를 다른 동작으로 바꾸면, 이 규칙이 깨지는 순간 이를 읽는 핵심 코드들 — `StatSystem`부터 `NetworkGameController.SyncFullGameState`까지 — 의 모든 계산이 틀린 값을 내게 됩니다. 이걸 입구에서 막기 위해 `sealed`(*이 클래스를 상속하지 못하게 막는 C# 키워드*)로 잠갔습니다. 필드 트리는 앞으로도 다른 변형이 필요할 일이 없으므로, 확장성을 포기하는 대가도 없었습니다.
+이 때문에 `FieldTree`의 `AddNode`·`GetAncestors`·`GetDescendants`는 이 규칙이 항상 참이라고 믿고 동작합니다. 그런데 누군가 `FieldTree`를 상속해서 `AddNode`를 다른 동작으로 바꾸면, 이 규칙이 깨지는 순간 이를 읽는 핵심 코드들 — `StatSystem`부터 `NetworkGameController.SyncFullGameState`까지의 모든 계산이 틀린 값을 내게 됩니다. 이걸 입구에서 막기 위해 `sealed`(*이 클래스를 상속하지 못하게 막는 C# 키워드*)로 잠갔습니다. 필드 트리는 앞으로도 다른 변형이 필요할 일이 없으므로, 확장성을 포기하는 대가도 없었습니다.
 
 동일한 이유로, 대부분의 도메인 상태·자료구조의 경우 거의 다 `sealed` 처리해두었습니다.
 
-자료구조가 가져야 할 기본 덕목들은, 거기에 이 프로젝트에서 필요한 연산은 모두 구현해두었습니다. 기본적으로 필드 트리를 생성하고, 노드를 추가하거나 받아오고, 추후 Sect 조회가 필요한 경우 사용할 탐색 로직들을 구현했습니다.
+자료구조가 가져야 할 기본 덕목들은, 거기에 이 프로젝트에서 필요한 연산은 모두 구현해두었습니다. 기본적으로 필드 트리를 생성하고, 노드를 추가하거나 받아오고, Sect 조회 로직에 사용할 탐색 로직들을 구현했습니다.
 
 ##### [`FieldNode.cs`](./Scripts/Domain/Structure/Field/FieldNode.cs)
 > 필드 트리의 노드(부모·자식 관계)
