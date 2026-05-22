@@ -1365,3 +1365,187 @@ Conditions.Register("HasCard",    new HasCardCondition());
 4. 모든 명령이 끝나면 `GameRuleSystem`에게 "승패/탈락 조건을 다시 확인해달라"고 알립니다.
 
 `EffectRunner` 자신은 **개별 명령이 무엇을 하는지 모릅니다.** `Draw`가 실제로 어떤 일을 하는지, `Destroy`가 어떤 일을 하는지에 대한 지식은 각 명령 클래스의 몫이고, `EffectRunner`는 그저 `cmd` 이름을 보고 해당 핸들러에게 떠넘기는 역할만 합니다. 이 분리 덕분에 새 명령을 추가해도 `EffectRunner`는 한 줄도 안 바뀝니다!!! 앞 절의 OCP가 코드 단에서 그대로 실현되는 지점입니다. (끼얏호우)
+
+##### [`TargetResolver.cs`](./Scripts/Effects/Core/TargetResolver.cs)
+> 카드 후보 풀 구성 + 최종 타겟 선택(Manual/Auto)
+
+JSON에서 카드 명령은 보통 `"from"` 필드로 대상 카드를 지정합니다.
+
+```json
+"from": { "owner": "Opponent", "zone": "Field",
+          "filter": { "cultist": { "op": ">=", "value": 3 } } }
+```
+
+이 내용을 보고 *"상대편 필드에서 신도가 3 이상인 카드들"*이라는 실제 CardInstance 목록을 만들어 돌려주고, 거기에 더해 *"그 중에서 몇 장을 누가 어떻게 고를지"*까지 책임지는 것이 `TargetResolver`입니다.
+
+| 단계 | 진입 메서드 | 무엇을 |
+| :--- | :--- | :--- |
+| 1. 후보 풀 만들기 | `Resolve(from, ctx)` | 조건에 맞는 카드들을 전부 모아 목록으로 |
+| 2. 실제로 골라내기 | `PickAsync(node, ctx)` | 그 목록에서 몇 장을 누가 어떻게 고를지 결정 |
+| 3. 한 장씩 묻기 | `ManualPickOneOrDoneAsync(...)` | "최대 N장, 도중 그만 OK" — 2번의 특수 형태 |
+
+##### 진입점 1: `Resolve` (후보 풀 생성)
+
+```csharp
+public List<CardInstance> Resolve(JObject from, TriggerContext ctx, bool excludeSource = false)
+```
+세 단계를 차례로 적용합니다. 위 JSON 예시 ("owner": "Opponent", "zone": "Field", "filter": {...})를 따라가며 풀어보겠습니다.
+
+1. 누구의 카드인가?
+   `owner` 먼저 *"누구를 대상으로 카드를 찾을지"*를 정합니다. JSON의 `"owner": "Opponent"`를 보고 *"나 자신을 제외한, 살아있는 다른 플레이어 전부"*로 반환합니다.
+      - 헬퍼: `ResolvePlayers` (`"Self"` / `"Opponent"` / `"All"` 같은 미리 정의한 약속어부터 *"신도가 가장 적은 플레이어"* 같은 통계 기반 선택까지 모두 여기서 처리)
+   ```csharp
+      var ownerToken = from["owner"];
+      var players = ResolvePlayers(ownerToken, ctx).ToList();
+   ```
+
+   ```csharp
+        public IEnumerable<Player> ResolvePlayers(JToken token, TriggerContext ctx)
+        {
+            var alive = _gameState.GetAlivePlayers().ToList();
+
+            if (token == null) return new[] { ctx.Source.OwnerSeat };
+
+            if (token.Type == JTokenType.String)
+            {
+                // Self: 자기 자신
+                // Opponent: 나 자신을 제외한 살아있는 플레이어 전부
+                // All: 나 자신을 포함한 살아있는 플레이어 전부
+                return token.ToString() switch
+                {
+                    "Self" => new[] { ctx.Source.OwnerSeat },
+                    "Opponent" => alive.Where(p => p != ctx.Source.OwnerSeat).ToList(),
+                    "All" => alive,
+                    _ => new[] { ctx.Source.OwnerSeat }
+                };
+            }
+
+            if (token is JObject obj)
+            {
+                string type = obj["type"]?.ToString();
+                string statKey = obj["stat"]?.ToString();
+
+                switch (type)
+                {
+                    case "PlayerLowestStat": return FindLowestStat(alive, statKey);
+                    case "OpponentLowerStat": return FindLowerThanSelf(alive, statKey, ctx.Source.OwnerSeat);
+                    default: return Enumerable.Empty<Player>();
+                }
+            }
+
+            return new[] { ctx.Source.OwnerSeat };
+        }
+   ```
+
+2. 어느 영역에서 찾을 것인가?
+   `zone` 대상 플레이어가 정해졌으면, 그 플레이어의 어디에 있는 카드를 볼지 결정합니다. `"zone": "Field"`이면 그 플레이어가 필드에 펼친 카드 전체를 가져옵니다. 가능한 값은 `Field` / `Hand` / `Deck` 세 가지입니다.
+      - 헬퍼: `GetCardsInZone`
+   ```csharp
+   string zoneStr = from["zone"]?.ToString() ?? "Field";
+   ```
+
+   ```csharp
+   private IEnumerable<CardInstance> GetCardsInZone(Player player, string zone) => zone switch
+   {
+      "Field" => _gameState.GetAllCards().Where(c => c.Zone == Zone.Field && c.OwnerSeat == player),
+      "Hand" => _gameState.GetAllCards().Where(c => c.Zone == Zone.Hand && c.OwnerSeat == player),
+      "Deck" => _gameState.GetAllCards().Where(c => c.Zone == Zone.Deck && c.OwnerSeat == player),
+      _ => Enumerable.Empty<CardInstance>()
+   };
+   ```
+
+3. 그 중 어떤 조건인가?
+   filter 2번에서 가져온 카드 묶음에서 조건을 만족하는 카드만 남깁니다. 예시의 `"filter": { "cultist": { "op": ">=", "value": 3 } }`는 *"신도수가 3 이상인 카드만"*이라는 뜻입니다. 그 외에도 카드 ID 지정(`cardIds`), 종파 일치(`inSect`), 앞면/뒷면 상태(`isRevealed`/`isCultistCard`) 등 다양한 조건이 가능합니다.
+      - 헬퍼: `ApplyFilter`
+   ```csharp
+   var filter = from["filter"] as JObject;
+   ```
+
+이 세 단계가 끝나면 *"상대편 필드에서 신도가 3 이상인 카드들"*이라는 실제 CardInstance 목록이 만들어집니다. 마지막에 `excludeSource == true`이면 효과를 발동시킨 카드 자신은 그 목록에서 제외합니다. 이는  "내 효과로 내가 파괴되면 안 되는" 경우에 대비한 안전장치입니다.
+
+##### 진입점 2: `PickAsync` (실제로 카드를 골라내기)
+
+```csharp
+public async Task<List<CardInstance>> PickAsync(JObject node, TriggerContext ctx,
+    bool singleOwner = false, bool excludeSource = false)
+```
+진입점 1번에서 조건에 맞는 카드 전부를 모았다면, 2번은 *그 중에서 실제로 몇 장을 누가 어떻게 골라낼지 결정*합니다. 내부에서는 두 가지 조건을 판별합니다.
+   1. 몇 장 고를 것인가?
+      `amount` 필드(`node["amount"]`)로 수량을 지정합니다. 단순 정수, 범위(min, max), 변수 참조(`{"var": "n"}`) 모두 가능합니다. 실제 정수로 환원하는 일은 앞 절의 `ValueResolver`가 담당합니다. 만약 `"amount": "All"`이라면 *후보 전체를 그대로*라는 뜻이라 별도 단축 경로로 빠집니다.
+   2. 누가 고를 것인가?
+      `selectionType`은 `Manual`과 `Auto` 두 가지 모드가 있습니다.
+         - `Manual`: `IPlayerInputProvider`에게 후보 목록과 수량 범위를 넘기고, **플레이어의 선택이 끝날 때 까지 결과를 기다립니다.**
+         ```var picked = await _input.SelectTargetsAsync(ctx.Actor, candidates, actualMin, actualMax, singleOwner);```
+         이 호출은 실제로는, 후에 서술할 *네트워크 왕복*을 동반하지만, `TargetResolver`는 알 필요 없이, 그냥 `await`로 기다립니다.
+         - `Auto`: `IRandomSource`로 후보를 셔플한 뒤 상위 N장을 가져옵니다.
+
+여기에서 `singleOwner == true`는 만일 2장 이상의 카드를 선택하는 경우에서 한 플레이어의 필드에서 선택하기 시작하면 다른 플레이어 필드에서는 선택하지 못하도록 강제하는 코드입니다. (기획 의도)
+
+##### 진입점 3: `ManualPickOneOrDoneAsync`
+
+```csharp
+public async Task<List<CardInstance>> ManualPickOneOrDoneAsync(Player actor,
+    List<CardInstance> candidates, bool singleOwner, bool excludeSource = false)
+```
+
+진입점 2에서만 처리하기 힘들어서 추가로 구현한 메서드입니다. *정확히 3장 파괴*와 *최대 3장까지 파괴*는 엄격하게 구분되어야 한다는 기획 의도에 맞게, 한 번에 0장 또는 1장만 묻습니다 (내부적으로 `min=0, max=1`). 호출자(예: `DestroyCommand`)는 이 메서드를 루프 안에서 반복 호출합니다. 매번 후보군을 새로 갱신해서 보여주고, 플레이어가 *"이번엔 그만"*을 누르면 빈 결과가 와서 루프가 종료됩니다.
+
+즉, 진입점 2에서는 클릭을 한 번에 강제하는 것과 달리, 진입점 3에서는 `min`/`max`를 루프로 응용해서 플레이어의 선택을 *'~까지'* 형태로 자유롭게 만들었습니다.
+
+---
+진입점 1에서 `ResolvePlayers`, `GetCardsInZone`은 이미 코드까지 보였으니, 나머지 도우미들만 간략히 짚고 넘어가겠습니다.
+
+`ResolvePlayers`가 부르는 통계 헬퍼 (3개)
+   - `FindLowestStat(alive, statKey)`: `statKey`의 스탯이 가장 낮은 플레이어를 찾습니다. 동률이면 전부 반환합니다.
+   ```csharp
+      private IEnumerable<Player> FindLowestStat(List<Player> alive, string statKey)
+      {
+         if (alive.Count == 0) return Enumerable.Empty<Player>();
+         var pairs = alive.Select(p => (p, v: GetPlayerStat(p, statKey))).ToList();
+         int target = pairs.Min(x => x.v);
+         return pairs.Where(x => x.v == target).Select(x => x.p).ToList();
+      }
+   ```
+   - `FindLowerThanSelf(alive, statKey, self)`: "나를 제외하고, 나보다 `statKey`의 스탯이 낮은 플레이어들" 을 모읍니다.
+   ```csharp
+      private IEnumerable<Player> FindLowerThanSelf(List<Player> alive, string statKey, Player self)
+      {
+         int selfStat = GetPlayerStat(self, statKey);
+         return alive.Where(p => p != self).Where(p =>
+         {
+            int v = GetPlayerStat(p, statKey);
+            return v < selfStat;
+         }).ToList();
+      }
+   ```
+   - `GetPlayerStat(player, statKey)`: 위 둘이 공통으로 쓰는 한 줄짜리 스탯 조회입니다. 실제 데이터는 `IEffectGameState`에 위임합니다.
+   ```csharp
+      private int GetPlayerStat(Player player, string statKey)
+      {
+         return _gameState.GetPlayerStat(player, statKey);
+      }
+   ```
+
+**`ApplyFilter` — 진입점 1의 *"다양한 조건"* 을 풀어서**
+
+| 필터 키 | 의미 |
+| :--- | :--- |
+| `isCultistCard: true` | 뒷면 카드(=신도 카드)만 |
+| `isRevealed: true` | 앞면 카드만 |
+| `inSect: true` | 발동 카드와 같은 종파의 카드들 |
+| `inSectOfCause: true` | `ctx.Cause` 카드와 같은 종파 |
+| `cardIds: [6, 7]` | 특정 카드 ID 목록 |
+| `cultist: 3` | *카드의* 신도수가 정확히 3 |
+| `cultist: { "op": ">=", "value": 3 }` | `op`는 `==`, `!=`, `>=`, `<=`, `>`, `<` 지원 |
+
+
+여기에, 마지막으로 다음과 같은 함수가 있습니다.
+
+`ResolveDeckCardsByFilter`는 *"덱 안에서 신도가 1인 카드를 찾아 손에 넣어라"* 처럼 owner와 zone이 이미 정해져 있고 filter만 적용하면 되는 경우의 단축 경로입니다.
+
+```csharp
+public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter)
+```
+
+`Resolve`가 JSON `from` 객체를 받는다면, 이쪽은 `Player`를 이미 들고 있는 코드 호출자(예: `DrawCommand`)를 위한 형태입니다. 둘 다 내부적으로는 `private` 헬퍼 `ApplyZoneAndFilter`를 부릅니다.
+
