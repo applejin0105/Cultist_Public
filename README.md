@@ -1549,6 +1549,7 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 `EffectRunner` 자신은 **개별 명령이 무엇을 하는지 모릅니다.** `Draw`가 실제로 어떤 일을 하는지, `Destroy`가 어떤 일을 하는지에 대한 지식은 각 명령 클래스의 몫이고, `EffectRunner`는 그저 `cmd` 이름을 보고 해당 핸들러에게 떠넘기는 역할만 합니다. 이 분리 덕분에 새 명령을 추가해도 `EffectRunner`는 한 줄도 안 바뀝니다!!! 앞 절의 OCP가 코드 단에서 그대로 실현되는 지점입니다. (끼얏호우)
 
+---
 
 ##### A. 인터페이스·인프라
 
