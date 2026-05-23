@@ -68,6 +68,8 @@
 다만, 이건 지금의 실력으로 전부 구현하는건 불가능하므로, 이 저수준(low-level) 네트워킹을 지원해주는 Mirror와 Steam Facepunch를 사용했습니다.
 1~4번 과정은 일부는 Mirror가, 일부는 Transport가 담당하고, 5번은 Steam에서 담당하고, 6번 검증은 Mirror의 권위 모델과 제가 설계한 서버 코드에서 담당하게 됩니다.
 
+---
+
 ### Mirror
 Mirror는 Unity용 고수준(High-level) 네트워킹 라이브러리입니다. 앞선 6개의 과정을 `[SyncVar]` 키워드 하나로 깔끔하게 해결해줍니다. 만일
 ``` [SyncVar] public int CurrentRound; ``` 이렇게 필드를 선언했다면, 서버에서 이 값이 변경되면 Mirror 가 알아서 모든 클라이언트들에게 전파합니다.
@@ -100,6 +102,8 @@ Transport는 **갈아끼울 수 있는 플러그인**입니다.
 
 기획 단계에서 "한 PC에서 여러 인스턴스로 빠르게 붙여 테스트하고 싶다"는 요구가 있었는데, 이 Transport 교체 구조가 그대로 답이 됐습니다. 배포 빌드는 `FizzyFacepunch`(Steam P2P)로 묶이지만, 개발 중에는 `kcp2k`로 갈아끼우고 같은 빌드를 여러 개 띄워 `127.0.0.1`로 붙입니다. Steam 로그인 없이도 매치가 성립하므로 반복 테스트가 훨씬 가벼워졌습니다.
 
+---
+
 ### Facepunch
 
 Facepunch.Steamworks는 C++ Steamworks SDK를 C#에서 편하게 부르도록 도와주는 C# 래퍼입니다. 유니티는 (내부 엔진 들어가면 C++) C#으로 게임을 짜기 때문에 C#에서 C++ DLL을 직접 부르는 건 매우 번거롭습니다. Facepunch.Steamworks는 (RUST를 개발한 게임사에서 만든 그 개쩌는 회사 Facepunch), C++로 만들어진 Steamworks SDK를 C# 코드에서 쉽게 접근이 가능하도록 다음과 같이 도와줍니다.
@@ -130,33 +134,7 @@ FizzyFacepunch의 `FizzyFacepunch.cs`입니다.
 
 그럼 이제, 본격적으로 내부 코드를 설명하며 이러한 Mirror와 FizzyFacepunch를 어떻게 멀티플레이 카드 게임에 적용하고 활용했는지 보여드리겠습니다.
 
-### 참고자료
-
-[네트워크 기초](https://waterglass0105.tistory.com/106)
-
-[언리얼 엔진의 프레임 워크와 기초 그리고 네트워크](https://waterglass0105.tistory.com/91)
-
-[유니티에서 Photon 사용하기](https://waterglass0105.tistory.com/135)
-
-[언리얼 엔진과 네트워크](https://waterglass0105.tistory.com/105)
-
-Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어보실 수 있습니다. 본격적인 멀티플레이 구성을 진입하기 전, 저는 다음과 같은 기준들을 세워보았습니다.
-1. 운영 비용 구조: 출시 전 검증되지 않은 단계에서, CCU(동시 접속자) 기반 반복 결제는 리스크이다.
-2. 플랫폼 적합성: 타겟 플랫폼이 Steam이므로, 친구 초대·오버레이 참여가 네이티브여야 한다.
-3. 로컬 플레이 보장: *기획자*의 요구는 '하나의 컴퓨터에서 여러개 쉽게 돌릴 수 있도록 테스트 환경을 제공해달라'이다.
-4. 의존성 확인: 특정 클라우드 벤더에 게임의 연결 계층 전체를 묶는 것은 아무래도 좀 부담된다.
-
-*다만 이렇게 되면 결국, 나중에 로비 기반 게임으로 업그레이드 해야할 때 다시금 코드를 뜯어 고쳐야하고, 그리고 무엇보다 편의성 측면에서 트레이드 오프가 생겨버렸습니다.* Photon이 주는 검증된 안정성과 편의(매니지드 인프라, 호스트 마이그레이션 등)를 포기하고, 트랜스포트 결선과 연결 수명주기를 직접 책임져야했고, 호스트 권위 P2P의 약점 (호스트가 나가면 세션 종료, 전용 서버 대비 보안·확장성 한계 → 지금도 게임 중간에 나가면 그냥 끝나버립니다.)를 인지하고, 이를 감수하고있습니다.
-
-전용 서버 자체로 만들어서 로비 구조는 쉽게 확장할 수 있습니다. 애초에 스켈레톤 코드를 구성할 때 이를 염두해 두고 작성했습니다. `NetworkGameController.OnStartServer()`가 `GameState`·모든 시스템·이펙트를 생성하고, 게임 로직은 로컬 클라이언트와 완전히 분리돼 있습니다. 하지만 이를 위해서는, 전용 서버 로직을 구현한다면 `SteamManager`에서 호스트 `SteamID` 기반 접속 로직을 수정해야합니다. 거기에 추가로 `RpcInitializeGameUI` → `InitUIRoutine`처럼 "호스트에도 로컬 플레이어가 있다"를 가정한 코드들을 전부 뜯어 고쳐야합니다.
-
-**추후 로비 시스템 기반으로 게임을 확장하겠지만, 현재까지는 이러한 트레이드 오프를 감수하여 진행했습니다. 추후 확장할 로비 시스템은 개념만 다음과 같이 잡아두었습니다.**
-
-### 추후, 로비 생성 및 헤드리스 서버 확장: Steam Game Server API로 포팅
-
-1. Steam에는 클라이언트 API와 별개로 게임 서버 전용 API([SteamGameServer](https://partner.steamgames.com/doc/api/isteamgameserver?language=english))가 있고, 이건 사람 로그인 없이 익명 로그인!!!!!
-2. 트랜스포트를 이 API 기반으로 교체/포팅하면, 헤드리스 서버에서도 Steam 네트워킹이 돌고 친구 플레이도 유지
-3. 호스팅: 어느 옵션이든 Mirror 패키지에 들어 있는 Edgegap(서버 호스팅·오케스트레이션) 연동을 출발점으로 사용 가능
+---
 
 ### 데이터 흐름 및 통신 방식
 > 다이어그램과 함께, 데이터 흐름 및 통신 방식에 대해 설명하겠습니다.
@@ -313,28 +291,52 @@ flowchart TD
 
 서버의 `GameRuleSystem`은 게임의 상태가 바뀔 때마다 승리조건을 판정합니다. 조건이 충족되면 `TriggerGameEnd(winnerSeat)`가 호출되고, 여기서 종료 전파를 `SyncVar` 두 개(`WinnerSeat`·`IsGameEnded`)로 처리합니다. 서버가 이 값을 설정하면 Mirror가 모든 플레이어에게 자동으로 전파하고, 각 클라이언트의 `OnGameEndedHook()`이 발화해 게임 종료 UI와 승/패 사운드를 재생합니다. 마지막으로 서버는 5초 후 `ServerChangeScene("03_Lobby")`로 전원을 로비로 되돌립니다.
 
+<br>
+
+---
+
+<br>
+
 ## Ⅲ. 핵심 기능 및 구현 로직 (Core Features)
 
 ### 용어 설명
-> Cultist: 게임의 신도 수를 나타냅니다. 필드에 놓인 카드가 뒷면으로 존재하면 이를 '신도 카드'라고 합니다. 필드에 뒷면으로 존재하는 동안 해당 신도 수 만큼 플레이어에게 신도가 추가되며, 신도수가 0이 되면, 게임에서 즉시 패배합니다. 카드를 뒤집기 위해서는 해당 카드의 신도수 만큼 신도수가 차감됩니다. 따라서, *필드에는 최소 한 장 이상의 카드가 뒷 면으로 존재해야합니다.*
-> Junction/Split: 분기점을 나타냅니다. 인게임 상에서는 Split 키워드로 사용되며, 해당 카드의 자식 노드가 2개 이상이 될 수 있음을 나타냅니다.
-> Sect: 한 카드의 종파는 해당 카드의 직계 부모 라인과 모든 자식을 뜻합니다.
-> SymbolR/SymbolG: 카드를 공개하기 위해 필요한 심볼/카드가 공개되면 받는 심볼을 뜻합니다. 심볼은 소비 자원이 아닙니다.
-> Reveal: 뒤집힌 카드를 조건 혹은 효과에 의해 '앞면'으로 공개합니다. 이때, 효과가 발동됩니다.
-> Destroy: 상대의 카드를 파괴합니다. 파괴된 카드는 교역소에 복사본이 생성됩니다.
-> Exile: 상대의 카드를 제외합니다. 제외된 카드는 교역소에 복사본이 생성되지 않습니다.
-> Sacrifice: 자신의 필드에서, 카드를 한 장 희생합니다. 파괴와 메커니즘은 같지만, 타겟이 자기 자신입니다.
-> Echo: 상대의 카드 효과로 파괴된다면, 파괴되는 대신 공개되는 효과입니다.
-> Crisis: 상대의 카드 효과로 파괴된다면, 게임에서 제외됩니다.
-> IsRoot: Root 카드 여부를 나타냅니다. 모든 카드의 시작점이며, 트리로 따지면 root node와 동일한 역할을 합니다.
-> IsForceSelect: 카드 가져오기 단계(교역 X)에서 강제로 선택되는 효과입니다.
-> IsRevealImmediately: 카드를 내려놓자마자 즉시 공개되는 효과입니다.
+> **Cultist**: 게임의 신도 수를 나타냅니다. 필드에 놓인 카드가 뒷면으로 존재하면 이를 '신도 카드'라고 합니다. 필드에 뒷면으로 존재하는 동안 해당 신도 수 만큼 플레이어에게 신도가 추가되며, 신도수가 0이 되면, 게임에서 즉시 패배합니다. 카드를 뒤집기 위해서는 해당 카드의 신도수 만큼 신도수가 차감됩니다. 따라서, *필드에는 최소 한 장 이상의 카드가 뒷 면으로 존재해야합니다.*
+> 
+> **Junction/Split**: 분기점을 나타냅니다. 인게임 상에서는 Split 키워드로 사용되며, 해당 카드의 자식 노드가 2개 이상이 될 수 있음을 나타냅니다.
+> 
+> **Sect**: 한 카드의 종파는 해당 카드의 직계 부모 라인과 모든 자식을 뜻합니다.
+> 
+> **SymbolR/SymbolG**: 카드를 공개하기 위해 필요한 심볼/카드가 공개되면 받는 심볼을 뜻합니다. 심볼은 소비 자원이 아닙니다.
+> 
+> **Reveal**: 뒤집힌 카드를 조건 혹은 효과에 의해 '앞면'으로 공개합니다. 이때, 효과가 발동됩니다.
+> 
+> **Destroy**: 상대의 카드를 파괴합니다. 파괴된 카드는 교역소에 복사본이 생성됩니다.
+> 
+> **Exile**: 상대의 카드를 제외합니다. 제외된 카드는 교역소에 복사본이 생성되지 않습니다.
+> 
+> **Sacrifice**: 자신의 필드에서, 카드를 한 장 희생합니다. 파괴와 메커니즘은 같지만, 타겟이 자기 자신입니다.
+> 
+> **Echo**: 상대의 카드 효과로 파괴된다면, 파괴되는 대신 공개되는 효과입니다.
+> 
+> **Crisis**: 상대의 카드 효과로 파괴된다면, 게임에서 제외됩니다.
+> 
+> **IsRoot**: Root 카드 여부를 나타냅니다. 모든 카드의 시작점이며, 트리로 따지면 root node와 동일한 역할을 합니다.
+> 
+> **IsForceSelect**: 카드 가져오기 단계(교역 X)에서 강제로 선택되는 효과입니다.
+> 
+> **IsRevealImmediately**: 카드를 내려놓자마자 즉시 공개되는 효과입니다.
 
 
 ---
 
 ### Chapter 1. 게임 상태 모델
 > 불변 데이터 `Card`, 런타임 `CardInstance` 그리고 서버 주도 `GameState`
+
+<br>
+
+---
+
+<br>
 
 #### [`Card.cs`](./Scripts/Domain/Entities/Card.cs)
 > DB에서 로드되는 불변 카드 정의(이름·상징·효과 텍스트 등)
@@ -351,6 +353,11 @@ flowchart TD
 
 `Card`는 카드 *종류*만 표현할 뿐, "이 카드가 지금 누구의 손에 있는가" 같은 런타임 상태는 일절 가지지 않습니다. 그 자리는 다음에 설명할 `CardInstance`가 채웁니다.
 
+<br>
+
+---
+
+<br>
 
 #### [`CardInstance.cs`](./Scripts/Domain/Entities/CardInstance.cs)
 > 게임 중 생성되는 런타임 카드 - 소유자·존·상태를 가짐
@@ -360,20 +367,32 @@ flowchart TD
 설계상 `CardInstance`는 무거운 Card 객체를 직접 보관하지 않고 가벼운 `int`인 `CardId`만 들고 있습니다. 실제 카드 정의가 필요한 순간에야 `BaseData` 프로퍼티가 `CardCatalog`(`CardId` → `Card` 조회)를 통해 *지연 조회*(필요할 때만 꺼내오는 방식)합니다. 덕분에 네트워크 동기화 시에도 무거운 객체 대신 `int` ID만 오가게 되어, 통신·로직 부담을 최소화했습니다.
 
 ```csharp
-        public int InstanceId { get; }
-        public int CardId { get; private set; }
-        public Player OwnerSeat { get; private set; }
+public int InstanceId { get; }
+public int CardId { get; private set; }
+public Player OwnerSeat { get; private set; }
 
-        public Zone Zone { get; private set; }
-        public CardStatus CardStatus { get; private set; }
+public Zone Zone { get; private set; }
+public CardStatus CardStatus { get; private set; }
 
-        public Card BaseData => CardCatalog.Instance.Get(CardId);
+public Card BaseData => CardCatalog.Instance.Get(CardId);
 ```
+
+<br>
+
+---
+
+<br>
 
 #### [`IdGenerator.cs`](./Scripts/Utils/IdGenerator.cs)
 > 덱 데이터를 인스턴스 ID가 부여된 `CardInstance`로 변환
 
 앞에서 설명했듯, 카드는 그 자체만으로 서버에서 사용되기에는 무겁고, '누구의' 카드인지 구별할 수 없기에 `CardInstance`를 사용합니다. 그리고 이 `CardInstance`가 가지는 고유한, 겹치면 안되는 고유값인 InstanceId를 생성해주는 `static class`입니다. 각 플레이어의 Index를 굳이 나눈 이유는 여기에 있습니다. 플레이어 1이라면 100부터, 2라면 200부터, 3이라면 300부터 시작하는 ID 값을 가지게 됩니다. 100 200 300을 각각 root 카드로 설정하고, 남은 카드들에 고유 ID를 붙여 관리하고 있습니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`GameState.cs`](./Scripts/Domain/State/Host/GameState.cs)
 > 서버가 단독으로 소유·관리하는 게임 전체 상태
@@ -399,6 +418,12 @@ private readonly List<PlayerState> _players = new();
 public IReadOnlyList<PlayerState> Players => _players;
 ```
 
+<br>
+
+---
+
+<br>
+
 #### [`PlayerState.cs`](./Scripts/Domain/State/PlayerState.cs)
 > 플레이어별 상태(신도·심볼·필드·손패·생존 여부)
 
@@ -407,18 +432,24 @@ public IReadOnlyList<PlayerState> Players => _players;
 TurnSystem은 GameState에서 턴 주인의 PlayerState를 조회하고, 그 데이터를 바탕으로 게임을 진행합니다.
 
 ```csharp
-        public void SetNextDrawRule(DrawRule drawRule)
-        {
-            NextDrawRule = drawRule;
-        }
+public void SetNextDrawRule(DrawRule drawRule)
+{
+    NextDrawRule = drawRule;
+}
 
-        public DrawRule ConsumeDrawRule()
-        {
-            var rule = NextDrawRule ?? DrawRule.Standard;
-            NextDrawRule = null;
-            return rule;
-        }
+public DrawRule ConsumeDrawRule()
+{
+    var rule = NextDrawRule ?? DrawRule.Standard;
+    NextDrawRule = null;
+    return rule;
+}
 ```
+
+<br>
+
+---
+
+<br>
 
 #### [`DeckCollection.cs`](./Scripts/Domain/Structure/Deck/DeckCollection.cs)
 > 덱 카드 순서를 다루는 LIFO 컬렉션
@@ -432,6 +463,12 @@ TurnSystem은 GameState에서 턴 주인의 PlayerState를 조회하고, 그 데
 
 `DeckCollection`은 기본적으로 C++에서 제공하는 algorithm 자료형을 본따서 만들었습니다. 즉, `DeckCollection`을 직접적으로 사용하는게 아니라, 이 자료구조를 바탕으로 이어서 나올 `DeckState`에서 이를 사용하고 있습니다.
 
+<br>
+
+---
+
+<br>
+
 #### [`DeckState.cs`](./Scripts/Domain/State/DeckState.cs)
 > 플레이어별 덱 - DeckCollection을 감싸는 façade
 
@@ -440,6 +477,12 @@ TurnSystem은 GameState에서 턴 주인의 PlayerState를 조회하고, 그 데
 플레이어의 덱은 `DeckCollection`이라는 LIFO 컬렉션으로 관리되며, `DeckState`는 그 컬렉션을 감싸 플레이어 단위 덱 상태를 표현합니다.
 
 Root 카드를 설정하고, `GameActionSystem`과 `TurnSystem` 그리고 `DrawCommand`에서 `DeckState`의 내부 함수를 호출해 카드를 뽑거나, 추가하는 등의 로직을 수행합니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`FieldTree.cs`](./Scripts/Domain/Structure/Field/FieldTree.cs)
 > 필드를 다루는 Tree 컬렉션
@@ -455,10 +498,22 @@ Root 카드를 설정하고, `GameActionSystem`과 `TurnSystem` 그리고 `DrawC
 
 자료구조가 가져야 할 기본 덕목들은, 거기에 이 프로젝트에서 필요한 연산은 모두 구현해두었습니다. 기본적으로 필드 트리를 생성하고, 노드를 추가하거나 받아오고, Sect 조회 로직에 사용할 탐색 로직들을 구현했습니다.
 
+<br>
+
+---
+
+<br>
+
 #### [`FieldNode.cs`](./Scripts/Domain/Structure/Field/FieldNode.cs)
 > 필드 트리의 노드(부모·자식 관계)
 
 FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신의 부모 `ParentInstanceId`, 자식인 `ChildrenInstanceIds`를 가지고 이를 관리합니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`FieldState.cs`](./Scripts/Domain/State/FieldState.cs)
 > 플레이어별 필드 - FieldTree를 감싸는 façade
@@ -469,10 +524,10 @@ FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신
 
 ```csharp
 // Before
-        public FieldTree GetFieldTree()
-        {
-            return PlayerFieldTree;
-        }
+public FieldTree GetFieldTree()
+{
+    return PlayerFieldTree;
+}
 ```
 
 원인은 같은 도메인의 `DeckState`와 비교했을 때 분명해졌습니다. `DeckState`는 내부 `DeckCollection`을 `private`으로 끝까지 숨겨, 누구도 자료구조에 직접 닿지 못하게 합니다. 두 클래스가 같은 의도(State가 자료구조를 감싼다)였는데, 한쪽만 그 의도를 지키고 있었던 것입니다.
@@ -482,6 +537,12 @@ FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신
 이렇게 다시금 리팩토링을 하는 과정에서, *래퍼 계층은 "존재 이유"를 벌어야 한다. 내부 객체를 그대로 반환하는 래퍼는 아무것도 보호하지 못한다. State는 자료구조를 숨기고, 외부에는 의도가 드러나는 좁은 API만 줄 때 비로소 façade가 된다.* 라는 중요한 사실을 학습할 수 있었습니다.
 
 현재는 이와 연계된 모든 코드를 수정 및 관련 오류를 해결했습니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`Phase.cs`](./Scripts/Domain/Enums/Phase.cs)
 > 메인/서브 페이즈 열거형 정의
@@ -495,12 +556,12 @@ FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신
 | `Play` | 카드 내려놓기 단계 |
 
 ```csharp
-        public enum Main
-        {
-            StandBy,
-            Draw,
-            Play,
-        }
+public enum Main
+{
+    StandBy,
+    Draw,
+    Play,
+}
 ```
 
 `Draw`는 다시 다음과 같이 3개의 상태를 가집니다.
@@ -512,6 +573,12 @@ FieldTree에 들어가는 Node입니다. 자기 자신의 `InstanceId`와 자신
 | `Trade` | 교역소에서 카드를 가져옴 |
 
 `Play`는 카드를 내려놓거나 뒤집을 수 있는 공통 상태인 `Play` 상태만을 가집니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`PhaseState.cs`](./Scripts/Domain/State/PhaseState.cs)
 > 메인/서브 페이즈 값
@@ -564,6 +631,12 @@ public static bool operator !=(PhaseState a, PhaseState b) => !a.Equals(b);
 
 부수효과로, `Sub`가 이미 `int`라 `NetworkGameController`가 `SyncVar`로 페이즈를 전 클라이언트에 보낼 때 `(Main, Sub)`를 두 `int`로 그대로 쪼개 보낼 수 있습니다.
 
+<br>
+
+---
+
+<br>
+
 #### [`TurnState.cs`](./Scripts/Domain/State/TurnState.cs)
 > 활성 플레이어·라운드·턴 순서
 
@@ -572,6 +645,12 @@ public static bool operator !=(PhaseState a, PhaseState b) => !a.Equals(b);
 이 게임은 보드게임을 베이스로 해 '행동의 반복'이 잦습니다. "카드 가져오기를 n번 반복", "교역을 한 번 더 진행" 같은 카드 효과가 많습니다. 초기에는 이를 게임 `Phase`를 되돌리는 방식으로 구현했는데, 페이즈가 꼬이고 드로우·교역이 막히며 라운드 카운팅 버그가 반복됐습니다. 원인은 하나였습니다. `Phase`는 "턴 안에서 지금 어디인가" 를 나타내는 값인데, 거기에 "턴을 몇 번 더 반복하는가" 라는 별개의 개념까지 떠맡긴 것이었습니다. 한 메커니즘이 두 책임을 겸하니 충돌이 났습니다.
 
 그래서 반복 횟수를 `RemainingCycles`라는 독립된 값으로 분리했습니다. 한 턴에 수행 가능한 사이클(Draw → Play)이 몇 번 남았는지를 뜻하며, 표준은 1회, Stonehenge 같은 효과가 이 값을 늘립니다. 이제 `Phase`는 "턴 내 위치"만, `RemainingCycles`는 "반복"만 책임지므로 두 로직이 서로 간섭하지 않습니다. 이 분리는 뒤에 설명할 DrawRule과도 잘 맞물립니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`GameActionRecord.cs`](./Scripts/Domain/History/GameActionRecord.cs)
 > 행동 로그 - 조건 판정 시 과거 기록 조회용
@@ -587,6 +666,12 @@ if (selected != null)
 }
 ```
 
+<br>
+
+---
+
+<br>
+
 #### [`DrawRule.cs`](./Scripts/Domain/Policies/DrawRule.cs)
 > 드로우 방식 정책(표준/지정 등)
 
@@ -595,19 +680,31 @@ if (selected != null)
 이를 해결하기위해 여러 방법을 모색하던 중, OOP의 기초를 다시금 머릿속으로 생각해보았습니다. 답은 간단했습니다. *복잡한 동작을 데이터 한 묶음으로 표현하면, 그걸 들고 다니며 시스템 어디서든 같은 규칙으로 해석할 수 있게 됩니다.* 복잡한 Draw 로직 자체를 클래스로 만들어서, Rule로 설계하고 턴이 시작될 때 System이 플레이어의 DrawRule을 읽게해서 관리한다면? 이 과정에서 '카드 가져오기 단계를 생략하고 신도가 n인 카드를 뽑는다'와 같이, 플레이어의 선택을 스킵하고 원하는 로직을 진행시킬 수 있게 구성하였습니다.
 
 ```csharp
-        public static DrawRule Standard => new DrawRule
-        {
-            Type = DrawType.Draft,
-            SkipSelection = false,
-            Amount = 3,
-            CardCondition = null
-        };
+public static DrawRule Standard => new DrawRule
+{
+    Type = DrawType.Draft,
+    SkipSelection = false,
+    Amount = 3,
+    CardCondition = null
+};
 ```
+
+<br>
+
+---
+
+<br>
 
 #### [`RevealReason.cs`](./Scripts/Domain/Enums/RevealReason.cs)
 > 카드 공개 호출 사유
 
 카드의 공개 조건을 나타내는 enum입니다. 추후 카드 효과가 추가되면 이곳에 추가 가능합니다. 추후 Effect 관련 로직에서 자주 사용합니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`DeterministicTreeLayout.cs`](./Scripts/Domain/Structure/Field/DeterministicTreeLayout.cs)
 > 필드 시각화 및 드롭존 처리
@@ -654,6 +751,12 @@ if (selected != null)
 | 1명 | 분기할 필요가 없으므로 부모와 동일한 X축을 유지한 채 Y축 방향으로만 이동하여 자식을 배치 |
 | 2명 이상 | 현재 노드에 할당된 전체 공간(`totalWidth`)의 가장 왼쪽 지점(`currentX`)을 계산. 이후 자식들을 순회하며 각 자식이 가진 고유 너비의 '절반' 위치에 중심점을 잡아 균등하고 대칭적으로 자식들을 배치. 하나를 배치할 때마다 `currentX`를 이동시켜 다음 자식의 시작 위치를 갱신 |
 
+<br>
+
+---
+
+<br>
+
 #### [`UICurvedLine.cs`](./Scripts/Domain/Structure/Field/UICurvedLine.cs)
 > 필드에 존재하는 카드를 연결하는 CurvedLine
 
@@ -696,10 +799,20 @@ $$P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$$
 
 [이 Curve Line은 대학생때 배운 Computer Animation에서 Laplician Editing 개념을 상기하며 구성해보았습니다.](https://waterglass0105.tistory.com/67)
 
+<br>
+
 ---
+
+<br>
 
 ### Chapter 2. 시스템
 > 카드 이동, 카드 액션, 카드 필드 그리고 덱 생성과 불러오기
+
+<br>
+
+---
+
+<br>
 
 #### [`CardMovementSystem.cs`](./Scripts/Systems/CardMovementSystem.cs)
 > 카드가 이동하는 단일 경로(출발지 제거 → 도착지 추가)
@@ -707,6 +820,12 @@ $$P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$$
 카드의 이동을 담당하는 시스템입니다. 카드 게임, 특히 핸드, 덱, 필드, 교역소로의 이동이 매우 활발하고 자주 이루어지기 때문에 이동간의 에러가 발생하거나 문제가 생기는 경우를 사전에 방지하고자 구현한 시스템입니다.
 
 게임 내에서 지원하는 모든 카드 이동을, 각각에 맞게 모두 지원하고있습니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`GameActionSystem.cs`](./Scripts/Systems/GameActionSystem.cs)
 > Draw, Play, Reveal 규칙 관리 시스템
@@ -811,6 +930,12 @@ $$P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$$
 7. 관련 트리거 발화 (`OnReveal`, `OnHand`, `OnDestroyed` ...)
 8. `CheckGameRules` (승패 판정)
 
+<br>
+
+---
+
+<br>
+
 #### [`FieldSystem.cs`](./Scripts/Systems/FieldSystem.cs)
 > 카드를 필드 트리에 배치하는 필드 조작 로직
 
@@ -827,14 +952,18 @@ $$P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$$
 
 설계상 `FieldSystem`은 매우 얇습니다. 정렬·탐색·자식 슬롯 관리 같은 무거운 로직은 모두 `FieldState`/`FieldTree`에 있고, `FieldSystem`은 "트리에 올리는 시점에 무엇이 함께 일어나야 하는가"만 묶어주는 역할입니다.
 
+<br>
+
+---
+
+<br>
+
 #### [`DeckRepository.cs`](./Scripts/Data/Repositories/DeckRepository.cs)
 > 파일 시스템·JSON 직접 IO (데이터 접근 계층)
 
 덱 데이터를 디스크에서 읽고 쓰는 모든 책임이 `DeckRepository`에 모여 있습니다. 게임 룰이나 인게임 흐름은 모르고, 오직 *"덱이 어디 저장되어 있고, 어떻게 읽고·쓰고·검증되는가"*만 압니다.
 
 이 분리 자체가 `Repository` 패턴입니다. *Repository 패턴*은 디자인 패턴 중 하나로, **데이터가 어디 저장됐는지(파일·DB·메모리)** 와 **데이터를 어떻게 쓸지(게임 룰)** 를 분리하는 구조를 뜻합니다.
-
-#### `DeckRepository`
 
 게임의 모든 덱은 두 종류로 나뉘고, 각각의 JSON에 배열 형태로 저장되어있습니다.
 
@@ -846,11 +975,11 @@ $$P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3$$
 `LoadAllDecksAsync`를 통해 이 두 소스를 모두 읽고, 덱을 불러옵니다. 샘플 덱 이름은 플레이어가 사용할 수 없게 하려는 기획 의도가 있었지만, 저장 진입점(`SaveCurrentDeckAsync`)에서 중복 검사가 플레이어 덱 목록에만 한정되어 있어 의도가 강제되지 않는 상태였습니다. 로드 시 충돌이 일어나면 플레이어 덱이 우선되는 `fallback`이 있었지만, 이는 '발생하면 안 되는 상황'을 처리하는 보험일 뿐 의도를 직접 반영한 코드가 아니었습니다. 샘플 이름 집합을 유지하고 저장 입구에서 차단하는 1차 방어를 추가해 의도를 코드로 정착시켰습니다.
 
 ```csharp
-            if (_sampleDeckNames.Contains(_currentDeckData.deckName))
-            {
-                Debug.LogWarning($"[DeckRepository] '{_currentDeckData.deckName}'은 샘플 덱 이름이라 사용할 수 없습니다.");
-                return false;
-            }
+if (_sampleDeckNames.Contains(_currentDeckData.deckName))
+{
+    Debug.LogWarning($"[DeckRepository] '{_currentDeckData.deckName}'은 샘플 덱 이름이라 사용할 수 없습니다.");
+    return false;
+}
 ```
 
 파일 입출력의 경우, 동시성 문제가 발생할 수 있습니다. 읽는 중에 쓰기가 동시에 일어나면 파일이 깨져버릴 수 있기에, `SemaphoreSlim`을 적용했습니다. *`SemaphoreSlim`은 한 번에 N명만 들어갈 수 있는 자물쇠이며, 여기선 N=1로 설정해 한 번에 한 명만 파일에 접근하도록 강제합니다.* `LoadPlayerDeckAsync`와 `SavePlayerDeckToFileAsync`가 이 락을 거칩니다. 오직 단 1개의 동시 접근만 허용하였습니다. 그리고 `await _fileLock.WaitAsync()` → 작업 → `try/finally`로 항상 `Release()`하여 안정성을 높였습니다.
@@ -861,12 +990,16 @@ private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
 
 각 메서드에 대한 간단한 설명은 다음과 같습니다.
 
+<br>
+
 **[로딩]**
 
 | 메서드 | 역할 |
 | :--- | :--- |
 | `LoadAllDecksAsync()` | 샘플 + 플레이어 덱 전부, 이름→`DeckData` 딕셔너리로 저장 |
 | `LoadPlayerDeckAsync()` | 플레이어 덱 파일만, 동시성 락 통과 |
+
+<br>
 
 **[편집]** (현재 편집 중인 덱 `_currentDeckData` 한 개를 잡고 작업)
 
@@ -878,12 +1011,16 @@ private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
 | `RemoveCardFromCurrentDeck(cardId)` | 카드 제거 |
 | `ClearCurrentDeck()` | 편집 상태 초기화 |
 
+<br>
+
 **[저장·삭제]**
 
 | 메서드 | 역할 |
 | :--- | :--- |
 | `SaveCurrentDeckAsync()` | 30장 정확히 채웠을 때만 저장. 원본 이름이 있으면 덮어쓰기로 처리 |
 | `DeleteDeckAsync(name)` | 샘플 덱은 삭제 불가 |
+
+<br>
 
 **[검증·제약]**
 
@@ -894,28 +1031,29 @@ private static readonly SemaphoreSlim _fileLock = new SemaphoreSlim(1, 1);
 | `IsCollectible` 체크 | 수집 불가 카드(`Card.IsCollectible == false`)는 덱에 못 넣음 |
 | `IsRoot` 분리 | 루트 카드는 `cardIds`에 안 들어가고 별도 `rootCardId` 필드로 |
 
+<br>
+
 [이름 중복 방지 (Regex)]
 ```csharp
-        private string GenerateUniqueDeckName(List<DeckData> existingDecks, string deckName)
+private string GenerateUniqueDeckName(List<DeckData> existingDecks, string deckName)
+{
+    if (existingDecks.All(d => d.deckName != deckName)) return deckName;
+
+    int maxIndex = 0;
+    var pattern = $@"^{Regex.Escape(deckName)}_(\d+)$";
+
+    foreach (var deck in existingDecks)
+    {
+        if (deck.deckName == deckName) continue;
+        var match = Regex.Match(deck.deckName, pattern);
+        if (match.Success)
         {
-            if (existingDecks.All(d => d.deckName != deckName)) return deckName;
-
-            int maxIndex = 0;
-            var pattern = $@"^{Regex.Escape(deckName)}_(\d+)$";
-
-            foreach (var deck in existingDecks)
-            {
-                if (deck.deckName == deckName) continue;
-                var match = Regex.Match(deck.deckName, pattern);
-                if (match.Success)
-                {
-                    maxIndex = Math.Max(maxIndex, int.Parse(match.Groups[1].Value));
-                }
-            }
-
-            return $"{deckName}_{maxIndex + 1}";
+            maxIndex = Math.Max(maxIndex, int.Parse(match.Groups[1].Value));
         }
+    }
 
+    return $"{deckName}_{maxIndex + 1}";
+}
 ```
 
 프로그래머가 사랑하는 정규식입니다. 원하던 효과는 덱 이름이 이미 있으면 `_숫자`를 붙여서 유일한 이름으로 만들어서 돌려주는 것이고, 그 숫자는 같은 베이스 이름을 가진 기존 변형들 중 가장 큰 인덱스 + 1로, 윈도우의 파일 시스템 생성처럼 진행하고자 했습니다.
@@ -948,6 +1086,12 @@ var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
 
 ### Chapter 3. 턴·페이즈 상태 머신
 > 턴 진행, 페이즈 전환 제어
+
+<br>
+
+---
+
+<br>
 
 #### [`TurnSystem.cs`](./Scripts/Systems/TurnSystem.cs)
 > 턴 순서 결정·턴 시작/종료·추가 사이클 처리
@@ -986,6 +1130,12 @@ var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
 
 [플레이어 순서 제어]
 게임은 기본적으로 Inf → Str 이 높은 순서로 플레이어의 차례를 결정합니다. 만약 정말 개쩌는 우연의 일치로 이 둘이 같다면? 이전 턴의 순서를 유지합니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`PhaseSystem.cs`](./Scripts/Systems/PhaseSystem.cs)
 > 페이즈 전환 상태 머신(`OnPhaseChanged` 이벤트 발행)
@@ -1061,6 +1211,12 @@ flowchart TD
 **JSON 데이터가 `EffectRegistry`에 한 번 캐시**되어 있고, **외부에서 트리거가 들어오면** `Effects.Core`의 엔진이 받아서 **`cmd` 이름에 맞는** `Effects.Commands`로 명령을 떠넘깁니다. `If`처럼 조건 평가가 필요한 명령일 때만 `Effects.Conditions`로 한 단계 더 이어집니다.
 
 그러면 이제, 그 JSON 구조가 실제로 어떻게 생겼는지 자세히 풀어 보겠습니다.
+
+<br>
+
+---
+
+<br>
 
 #### JSON 데이터 구조
 
@@ -1296,7 +1452,11 @@ JSON에는 정수가 들어가는 자리가 여럿 있습니다. `amount`, 비�
 2. `n ≥ 3`이면 `n`장 파괴
 3. 아니면 로그만 남기고 종료
 
+<br>
+
 ---
+
+<br>
 
 ##### OCP 성립, 추가 확장
 
@@ -1309,7 +1469,11 @@ JSON에는 정수가 들어가는 자리가 여럿 있습니다. `amount`, 비�
 
 처음 설계할 때 OCP를 의식하고 짠 건 아닙니다. 기획자가 카드를 늘릴 때마다 기존 코드가 흔들리지 않도록 만들고 싶다는 목표에서 출발해, Command + Registry 패턴을 따라가다 보니 결과적으로 그 모양이 됐습니다. SOLID를 공부하면서 "아, 이게 OCP라는 거였구나" 하고 뒤늦게 이름을 붙일 수 있었던 부분입니다.
 
+<br>
+
 ---
+
+<br>
 
 #### [`EffectRegistry.cs`](./Scripts/Data/Models/EffectRegistry.cs)
 > JSON 카드 효과를 메모리에 적재·캐시
@@ -1448,6 +1612,11 @@ Conditions.Register("HasCard",    new HasCardCondition());
 
 새 조건을 추가하는 비용은 명령과 동일 클래스 하나 + `Register` 한 줄. JSON에서 새 `type`을 쓰는 순간부터 `If`에서 사용할 수 있습니다.
 
+<br>
+
+---
+
+<br>
 
 #### [`ValueResolver.cs`](./Scripts/Effects/Core/ValueResolver.cs)
 > JSON 동적 값(변수·카드 수 등)을 정수로 해석
@@ -1466,6 +1635,12 @@ Conditions.Register("HasCard",    new HasCardCondition());
 이 외에 `ResolveAmountRange`라는 함수도 있어서, `{ "min": 0, "max": 2 }` 같은 범위 표현을 (min, max) 형태로 풀어줍니다.
 
 이 변환기 하나가 있기 때문에 `DrawCommand`나 `DestroyCommand` 같은 명령들은 amount 자리에 무엇이 들어오든 **JSON 모양에 신경 쓸 필요가 없습니다.** "정수 하나 달라"고 요청하면 정수가 옵니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`TargetResolver.cs`](./Scripts/Effects/Core/TargetResolver.cs)
 > 카드 후보 풀 구성 + 최종 타겟 선택(Manual/Auto)
@@ -1668,6 +1843,11 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 `Resolve`가 JSON `from` 객체를 받는다면, 이쪽은 `Player`를 이미 들고 있는 코드 호출자(예: `DrawCommand`)를 위한 형태입니다. 둘 다 내부적으로는 `private` 헬퍼 `ApplyZoneAndFilter`를 부릅니다.
 
+<br>
+
+---
+
+<br>
 
 #### [`EffectRunner.cs`](./Scripts/Effects/Core/EffectRunner.cs)
 > 이펙트 트리거 실행 진입점
@@ -1732,6 +1912,11 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 효과 코드는 `IEffectGameState` 타입으로 `GameState`를 받습니다. 같은 객체지만 좁은 창을 통해서만 봅니다. 인터페이스에 적힌 `Get*` 메서드는 보이고, 적히지 않은 `AddPlayer` 같은 쓰기 메서드는 컴파일러가 막아줍니다. 사람의 실수를 컴파일러가 잡아주는 구조입니다.
 
+<br>
+
+---
+
+<br>
 
 #### [`IRandomSource.cs`](./Scripts/Effects/Core/IRandomSource.cs)
 > RNG를 통제 가능한 형태로 가두는 장치
@@ -1746,10 +1931,22 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 하지만 지금까지의 코드를 자세히 보게 되면, 사실 이 게임 시스템에서는 호스트만 효과를 실행하므로 호스트-클라이언트 RNG 동기화는 중요하지 않습니다. 하지만 추후 게임에 리플레이도 넣고 싶고, 개발 과정에서 효과가 올바르게 작동하는지 제대로 보기 위한, 미래를 위한 장치로 남겨두었습니다.
 
+<br>
+
+---
+
+<br>
+
 #### [`ICommand.cs`](./Scripts/Effects/Commands/ICommand.cs)
 > 모든 카드 효과 명령어의 공통 인터페이스
 
 모든 cmd 효과의 공통 인터페이스입니다. 내부에는 모든 효과가 기본적으로 가져야 할 메서드와 그 파라미터가 깔★끔하게 정리되어있습니다.
+
+<br>
+
+---
+
+<br>
 
 #### [`ICondition.cs`](./Scripts/Effects/Conditions/ICondition.cs)
 > 모든 조건의 공통 인터페이스
@@ -1758,4 +1955,9 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 현재 등록된 조건은 `Compare`, `HasSymbol`, `HasCultist`, `HasCard` 4종이며, 각자 `ICondition`을 직접 구현합니다.
 
+<br>
+
 ---
+
+---
+
