@@ -1972,3 +1972,349 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 ---
 
+#### B. 명령들 — 단순부터 복잡
+
+##### [`DrawCommand.cs`](./Scripts/Effects/Commands/Card/DrawCommand.cs)
+> 정해진 수만큼 카드를 뽑음
+
+Source 카드 OwnerSeat에게 즉시 N장 드로우를 요청하는 커맨드입니다.
+
+##### [`RevealCommand.cs`](./Scripts/Effects/Commands/Card/RevealCommand.cs)
+> 필드 신도 카드를 강제로 공개
+
+효과에 의해 필드의 뒷면 카드를 강제로 뒤집는 커맨드입니다. 당연하겠지만 '뒷면' 상태인 신도카드만 뒤집을 수 있으므로 처음에
+
+```csharp
+            var from = node["from"] as JObject;
+            if (from != null)
+            {
+                var filter = from["filter"] as JObject;
+                if (filter == null) from["filter"] = filter = new JObject();
+                filter["isCultistCard"] = true;
+            }
+```
+
+이 작업을 통해, 카드가 뒷면인지 필터링을 거칩니다. 그 뒤에, 강제 공개를 실행합니다.
+
+##### [`TargetedRemovalCommand.cs`](./Scripts/Effects/Commands/Card/TargetedRemovalCommand.cs)
+
+먼저, 게임 룰 차원에서 `파괴`/`제외`/`희생`의 차이는 다음과 같습니다.
+
+| 명령 | 의미 | 실제 액션 |
+| :--- | :--- | :--- |
+| Destroy | 상대 카드 파괴 | 파괴 후 교역소에 복사본 생성 |
+| Exile | 상대 카드 추방 | 복사본 없이 완전 제거 |
+| Sacrifice | 내 카드를 비용으로 바침 | Destroy와 같은 액션 |
+
+세 명령은 거의 같은 일을 수행합니다. 차이는 마지막 액션 한 줄과 의미 정도만 있습니다. 그래서 공통 코드는 부모 클래스가 가져가고, 자식은 다른 부분만 채우도록 설계했습니다.
+
+```mermaid
+graph TD
+    A["ICommand (인터페이스)"]
+    B["TargetedRemovalCommand (부모, 추상 클래스)"]
+    C[DestroyCommand]
+    D[ExileCommand]
+    E[SacrificeCommand]
+
+    A --> B
+    B --> C
+    B --> D
+    B --> E
+```
+
+이렇게 부모가 거의 모든 일을 처리하고, 자식은 자기만의 특징을 한두 줄로 정의하고있습니다.
+
+부모는 기본적으로 다음과 같은 일을 공통적으로 처리합니다.
+- JSON에서 옵션 읽기 (amount, selectionType, singleOwner 등)
+- "모두 제거" 단축 모드 처리
+- 타겟팅 방식 결정 (Manual / Auto)
+- 픽 루프 실행 (한 장씩 골라서 액션 적용)
+
+이렇게 되면, 자식은 다음 3가지만 채우면 됩니다.
+
+```csharp
+// 필수 — 실제 액션 한 줄
+protected abstract Task ApplyAsync(Player actor, CardInstance target);
+
+// 선택 — 실행 전 검증/조작 (기본은 그냥 통과)
+protected virtual Task<bool> PreCheckAsync(...) => Task.FromResult(true);
+
+// 선택 — 픽 루프 끝난 뒤 처리 (기본은 아무것도 안 함)
+protected virtual Task PostLoopAsync(...) => Task.CompletedTask;
+```
+
+즉, ExecuteAsync는 다음 4단계의 흐름을 거치게 됩니다.
+
+```
+[1] PreCheckAsync 호출
+    → 실패하면 ctx.Cancelled = true 하고 종료
+
+[2] amount가 "All"이면
+    → 후보 카드 전부에 ApplyAsync 적용하고 끝
+
+[3] amount가 숫자/범위면 selectionType에 따라 분기
+    Manual → 단일 풀에서 사용자가 픽 (RunPickLoopAsync 1회)
+    Auto   → 명단의 각 플레이어에게 자동 적용 (RunPickLoopAsync × 인원수)
+
+[4] PostLoopAsync 호출 (Sacrifice가 여기서 뒷처리)
+```
+
+Manual과 Auto는 단순히 수동선택과 자동선택을 의미하는게 아닙니다. 사실 이 시스템에서 가장 중요한 포인트이며, `selectionType`의 타겟팅 방식 자체를 결정합니다.
+
+|  | Manual | Auto |
+| :--- | :--- | :--- |
+| 후보 처리 | 전체를 하나의 풀로 합침 | 각 플레이어를 따로 처리 |
+| 픽 방식 | 사용자가 직접 고름 | 랜덤 자동 |
+| 자연스러운 의미 | "한 명을 골라 친다" | "모두에게 휩쓴다" |
+
+따라서 이를 통해 같은 `owner: "All"`이라도
+  - Manual이면 "누군가 한 명에게서" (사용자가 첫 픽으로 결정, 이 게임에서는 먼저 클릭한 카드의 '주인'을 저장하고, 그 플레이어 카드만 선택 가능)
+  - Auto면 "모두에게 1장씩" (살아있는 모든 플레이어 각자에게 자동)
+
+그러면 이러한 정보를 바탕으로, `RunPickLoopAsync`는 대략적으로 다음과 같이 작동하게 됩니다.
+
+```csharp
+for (int i = 0; i < max; i++)
+{
+    if (게임 종료) break;
+
+    // 매 루프마다 후보를 새로 가져온다
+    var candidates = _targets.Resolve(...);
+    if (잠금된 owner 있음) candidates에서 그 owner만 남김;
+    if (후보 없음) break;
+
+    var picked = (Manual) ? 사용자에게 묻기 : 랜덤 1장;
+    if (사용자가 Done 누름) break;
+
+    if (singleOwner && 아직 잠금 안 됨) → 이번 픽의 owner로 잠금;
+
+    await ApplyAsync(actor, picked);  // 자식이 정의한 한 줄
+    processed++;
+    await Task.Delay(200);  // 연출용 짧은 대기
+}
+return processed;
+```
+
+이 과정을 거쳐 `DestroyCommand`와 `ExileCommand`는 정말 한 줄만 다르게 구현했습니다.
+
+```csharp
+// DestroyCommand
+protected override Task ApplyAsync(Player actor, CardInstance target)
+    => _actionSystem.Destroy(actor, target);
+
+// ExileCommand
+protected override Task ApplyAsync(Player actor, CardInstance target)
+    => _actionSystem.Exile(actor, target);
+```
+
+핵심은 **JSON에서 `"Destroy"` ↔ `"Exile"` 키워드만 바꿔도 타겟팅 동작은 완전하게 같게** 구현했습니다. **어디까지나 차이는 마지막에 교역소에 복사본을 남기는지, 남기지 않는지만 차이가 존재하게 구현**했습니다.
+
+다만, `SacrificeCommand`는 조금 다릅니다. 골조는 똑같지만
+1. 상대 카드가 아닌 내 카드
+2. 자살방지
+
+이 두 가지를 처리하기 위해 두 hook(*hook = virtual 키워드로 만든 "비워둔 자리"*)을 사용합니다
+
+우선, 희생은 시작 전 검증이 필요합니다.
+
+```csharp
+protected override Task<bool> PreCheckAsync(JObject node, TriggerContext ctx)
+{
+    var from = node["from"] as JObject;
+    if (from == null) return Task.FromResult(false);
+
+    // owner 강제 — 희생은 항상 내 카드 대상
+    from["owner"] = "Self";
+
+    // 자살 방지
+    // 내 시트, Field, 그리고 뒷면(신도카드), 그리고 방어용으로 BaseData가 비어있지 않은 것 대상
+    var myCultistCards = ctx.GameState.GetAllCards().Where(c =>
+        c.OwnerSeat == ctx.Actor &&
+        c.Zone == Zone.Field &&
+        c.CardStatus == CardStatus.FieldBack &&
+        c.BaseData != null).ToList();
+
+    int requiredAmount = ValueResolver.ResolveInt(node["amount"], ctx, _targets, 1);
+
+    if (!CanPay(myCultistCards.Count, requiredAmount))
+    {
+        Debug.LogWarning($"[SacrificeCommand] {ctx.Actor} 자살 방지: " +
+                            $"필드에 뒷면 신도 카드가 부족함. " +
+                            $"(현재:{myCultistCards.Count}장, 요구:{requiredAmount}장 + 1장)");
+        return Task.FromResult(false);
+    }
+
+    return Task.FromResult(true);
+}
+```
+
+기획 의도는, '자살은 불가능'하게 만드는 것이므로, 신도가 0이 되면 게임에서 즉시 패배이므로 꼼꼼하게 처리해보았습니다.
+
+그러면 희생이 끝난 뒤에는? 다음과 같이 처리합니다.
+
+```csharp
+protected override async Task PostLoopAsync(JObject node, TriggerContext ctx,
+    EffectRunner runner, int processed)
+{
+    int required = amount 읽기;
+
+    if (processed >= required)
+    {
+        // 비용을 다 냈으면 보상(then) 실행
+        var thenBranch = node["then"] as JArray;
+        if (thenBranch != null) await runner.RunNodesAsync(thenBranch, ctx);
+    }
+    else
+    {
+        // 사용자가 중간에 멈췄거나 카드 부족 → 전체 효과 취소
+        ctx.Cancelled = true;
+    }
+}
+```
+
+핵심은 **요구한 N장을 다 희생해야 보상이 발동한다** 그리고 **도중에 멈추면 당연히 효과 자체를 취소한다.**에 중점을 두었습니다.
+
+**static CanPay**를 좀 더 쉽게 이해하기 위해서, 지금 게임의 멀티플레이 구조가 어떻게 되는지 알 필요가 있습니다.
+
+```
+[클라이언트] "카드 18번 공개하고 싶어요"  →  [호스트]
+                                            ↓
+                                        판정: 가능? 불가능?
+                                            ↓
+[클라이언트] ← "OK/거절"             ←  [호스트]
+```
+
+이건 앞에서도 설명했듯이, 호스트가 `GameState`를 가지고 내부의 모든 정보를 처리하고, 클라이언트는 앞선 RPC B-1 메커니즘을 통해 호스트에게 '요청'을 보내야합니다.
+
+그런데 만일, 호스트만 이 검증을 전부 처리한다고 하면 게임이 좀 답답해집니다.
+
+1. 사용자가 자살하는 카드를 클릭
+2. 클라이언트 → 호스트로 RPC 전송 (네트워크 왕복)
+3. 호스트가 검증해서 "안 됩니다"
+4. 클라이언트로 다시 응답 (또 네트워크 왕복)
+5. UI에 "안 됩니다" 메시지 표시
+
+이 과정을 생략하고 싶었습니다. 그러려면? 클라이언트도 미리 같은 룰을 검증해야 합니다. 자살하는 카드는 아예 하이라이트도 안 되고 클릭도 안 되게 막아두어서 자살 자체를 방지하면, 굳이 무겁게 요청을 보낼 필요도 없고, 만약에 아주 만약에 클릭해버렸네? 그럼 서버에도 요청을 보내 거절도 가능하니 일석이조입니다. (끼얏호우)
+
+그럼 그냥 단순하게 호스트에도 짜고, 클라이언트에도 똑같은 자살 방지 로직을 짜면 되는거 아닌가? 그런데 이게 좀 위험할 수 있습니다. 둘 중 하나만 바뀌어도 이게 게임이 아주 이상해집니다. 당연하게도. 그리고 컴파일러는? 알려주지 않습니다. 매정한 녀석.
+
+그럼 왜 또 `static`인가?
+
+만약 일반 메서드였으면 `new SacrificeCommand(...)` 인스턴스부터 만들어야 부를 수 있습니다. 근데 클라이언트 측 코드(`InGameCardUI` 내부에서의 호출)는 `SacrificeCommand` 인스턴스를 가지고 있지 않습니다. 그쪽은 게임 시스템 의존성(`gameState`, `actionSystem` 등)을 받지 않고, UI 위에서 "클릭 가능한지" 만 판단하는 가벼운 코드기 때문입니다. `static`으로 두면 인스턴스 없이 함수 그 자체만 호출할 수 있습니다. `CanPay`는 입력(신도 카드 수, 요구량) → 출력(`true`/`false`)만 있는 순수한 산수라서 인스턴스 의존성도 필요 없습니다.
+
+즉, 요약해보면 *호스트와 클라이언트 양쪽에서 똑같은 검증이 필요한데, 코드를 따로 짜두면 나중에 어긋날 위험이 있다. 그래서 룰을 정적 메서드 하나로 만들고 양쪽이 같은 함수를 부르게 했다. 룰을 바꿀 때 한 줄만 고치면 양쪽이 동시에 바뀐다.*
+
+이렇게 해서 나온 결과가 바로
+
+- 호스트(서버): PreCheckAsync에서 호출: 실제 검증
+- 클라이언트: EffectValidator에서 호출: UI에서 클릭 차단
+
+이렇게 두 곳이 같은 함수를 부르게 되므로 룰이 어긋날 일 자체를 막아두었습니다!
+
+이를 통해 각 카드는 다음과 같이 동작하게 됩니다.
+
+| 카드 | 명령 + 옵션 | 결과 |
+| :--- | :--- | :--- |
+| 7 메시아 | Destroy / Manual / Opponent / singleOwner / amount:n | 한 상대에서 n장 파괴 |
+| 9 토페트 | Sacrifice / Manual / amount:1 / then(pantheon+1) | 내 신도 1장 + 만신전 1 |
+| 11 정복 | Exile / Auto / 약자 1명 | 약자한테서 랜덤 1장 추방 |
+| 12 전쟁 | Exile / Auto / 모두 | 자기 포함 모두 1장씩 추방 |
+| 13/14 기근/죽음 | Exile / amount:"All" | 신도-N 카드 전부 추방 |
+| 16~29 | Destroy / Manual / 약자 / singleOwner / 범위 | 약자한테서 0~N장 파괴 |
+| 18/23/38 | Sacrifice (OnRevealCost) / Manual / amount:1 | 신도 1장 희생 → 카드 공개 → 자원 획득 |
+
+- [`DestroyCommand.cs`](./Scripts/Effects/Commands/Card/DestroyCommand.cs)
+- [`ExileCommand.cs`](./Scripts/Effects/Commands/Card/ExileCommand.cs)
+- [`SacrificeCommand.cs`](./Scripts/Effects/Commands/Card/SacrificeCommand.cs)
+
+
+##### [`TradeCommand.cs`](./Scripts/Effects/Commands/Card/TradeCommand.cs)
+> 교역소 메커니즘으로 카드 가져오기
+
+교역을 수행합니다. 만약에 교역을 수행 못하면? 기아를 그냥 덱에다 콱! 넣어버립니다.
+
+##### [`StarveCommand.cs`](./Scripts/Effects/Commands/Card/StarveCommand.cs)
+> 덱에 기아 카드를 추가
+
+기아 카드를 덱에 넣어버립니다. 콱!
+
+##### [`GetCommand.cs`](./Scripts/Effects/Commands/Resource/GetCommand.cs)
+> 심볼 영구 획득
+
+카드가 앞면으로 존재하면 즉, 카드가 '공개'되었다면 그 카드는 파괴되지 않습니다(기획의도). 따라서 카드 효과 중, `단결력을 1 얻습니다 `와 같이 Symbol G가 아닌 effect로 심볼을 획득하는 경우는 '영구 획득'으로 간주, 스탯에 영구적으로 반영시킵니다.
+
+
+##### [`SetNextDrawCommand.cs`](./Scripts/Effects/Commands/Phase/SetNextDrawCommand.cs)
+> 다음 드로우 단계의 규칙(`DrawRule`)을 설정
+
+플레이어의 다음 DrawRule을 설정합니다.
+
+##### [`AddTurnCycleCommand.cs`](./Scripts/Effects/Commands/Turn/AddTurnCycleCommand.cs)
+> BonusCycle 추가
+
+플레이어에게 `amount`만큼 `BonusTurnCycles`을 추가합니다.
+
+추후 이를 응용해서 bonusTurnCycle을 -1 같은 식으로 보내서 플레이어의 드로우 페이즈를 넘겨버리는 강력한 카드 효과도 생각중에 있습니다.
+
+---
+
+#### C. 흐름 제어 — 다른 명령을 조작하는 메타 명령
+
+##### [`LogCommand.cs`](./Scripts/Effects/Commands/Flow/LogCommand.cs)
+> 디버그 출력
+
+```csharp
+        public Task ExecuteAsync(JObject node, TriggerContext ctx, EffectRunner runner)
+        {
+            string msg = node["msg"]?.ToString() ?? "(no msg)";
+            string cardName = ctx.Source?.BaseData?.Name ?? "?";
+            Debug.Log($"[CardEffect:Log] {cardName}({ctx.Source?.InstanceId}) → {msg}");
+            return Task.CompletedTask;
+        }
+```
+
+##### [`SetVarCommand.cs`](./Scripts/Effects/Commands/Flow/SetVarCommand.cs)
+> `IntExpr` 결과를 `TriggerContext.Vars`에 이름붙여 저장
+
+`SetVar`를 저장하는 명령어입니다.
+
+##### [`IfCommand.cs`](./Scripts/Effects/Commands/Flow/IfCommand.cs)
+> Condition 평가 → `then` / `else` 가지 중 하나를 재귀 실행
+
+조건문 분기를 처리합니다. 
+
+---
+
+---
+
+#### D. 조건들
+
+##### [`CompareCondition.cs`](./Scripts/Effects/Conditions/CompareCondition.cs)
+> 두 `IntExpr`를 op(`>=`, `==` 등)로 비교
+
+두 수치를 비교하는 범용 조건문입니다.
+```json
+JSON: { "type": "Compare", "lhs": IntExpr, "op": ">"|">="|"<"|"<="|"==", "rhs": IntExpr }
+```
+앞서 `SetVarCommand`를 통해 저장된 `SetVar`들과, `GameState`로부터 조회한 값들을 비교하는데 사용합니다.
+
+---
+
+---
+
+#### E. 조립·메타
+
+##### [`EffectsBootstrap.cs`](./Scripts/Effects/Core/EffectsBootstrap.cs)
+> 위 모든 Command·Condition을 등록·조립하는 단일 지점
+
+각 명령어와 조건을 등록합니다. 별도의 클래스에서 개별적으로 등록하는게 아닌, 이 `EffectsBootstrap`에서 게임에 진입하면 내부에 선언된 `Register`를 자동으로 불러와 하나씩 등록합니다.
+
+이 프로젝트에서는 `NetworkGameController`에서 게임이 네트워크에 연결되고 InGame 씬에 진입했을 때 호출하여 로그로 띄워줍니다!
+
+
+<br>
+
+---
+
+<br>
+
