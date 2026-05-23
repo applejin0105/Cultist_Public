@@ -6,13 +6,13 @@
 
 ## 목차
 
-1. [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
-2. [Ⅱ. 시스템 아키텍처 (Architecture)](#ⅱ-시스템-아키텍처-architecture)
-3. [Ⅲ. 핵심 기능 및 구현 로직 (Core Features)](#ⅲ-핵심-기능-및-구현-로직-core-features)
-   1. [Chapter 1. 게임 상태 모델](#chapter-1-게임-상태-모델)
-   2. [Chapter 2. 시스템](#chapter-2-시스템)
-   3. [Chapter 3. 턴·페이즈 상태 머신](#chapter-3-턴페이즈-상태-머신)
-   4. [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템)
+[Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
+[Ⅱ. 시스템 아키텍처 (Architecture)](#ⅱ-시스템-아키텍처-architecture)
+[Ⅲ. 핵심 기능 및 구현 로직 (Core Features)](#ⅲ-핵심-기능-및-구현-로직-core-features)
+   [Chapter 1. 게임 상태 모델](#chapter-1-게임-상태-모델)
+   [Chapter 2. 시스템](#chapter-2-시스템)
+   [Chapter 3. 턴·페이즈 상태 머신](#chapter-3-턴페이즈-상태-머신)
+   [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템)
 
 ## Ⅰ. 프로젝트 개요 (Overview)
 
