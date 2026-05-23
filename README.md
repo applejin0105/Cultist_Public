@@ -326,8 +326,11 @@ flowchart TD
 > 
 > **IsRevealImmediately**: 카드를 내려놓자마자 즉시 공개되는 효과입니다.
 
+<br>
 
 ---
+
+<br>
 
 ### Chapter 1. 게임 상태 모델
 > 불변 데이터 `Card`, 런타임 `CardInstance` 그리고 서버 주도 `GameState`
@@ -1082,7 +1085,11 @@ var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
 
 결국 `DeckSystem.Initialize()`는 매 서버 시작마다 *디스크에서 모든 덱을 로드해 캐시에 담지만 누구도 그 캐시를 읽지 않는* 상태가 됐고, 검토 후 클래스 자체를 삭제했습니다. 앞서 `FieldState` 절에서 다뤘던 *"래퍼 계층은 '존재 이유'를 벌어야 한다"* 원칙이 여기서도 같은 결론으로 이어졌습니다.
 
+<br>
+
 ---
+
+<br>
 
 ### Chapter 3. 턴·페이즈 상태 머신
 > 턴 진행, 페이즈 전환 제어
@@ -1166,7 +1173,11 @@ var deckState = Utils.IdGenerator.ReturnInstanceIdDeck(dData, (Player)i);
   ```
   이 안전장치를 통해 더 이상 스킵을 확인할 필요 없이 그대로 사이클을 종료(루프 탈출)하도록 구성했습니다.
 
+<br>
+
 ---
+
+<br>
 
 ### Chapter 4. 카드 효과 시스템
 > JSON 데이터 기반의 카드 효과
