@@ -2318,3 +2318,35 @@ JSON: { "type": "Compare", "lhs": IntExpr, "op": ">"|">="|"<"|"<="|"==", "rhs": 
 
 <br>
 
+#### Chapter 5. 승패 판정 시스템
+> 필드 상태 기반 스탯 재계산 그리고 승리 조건
+
+##### [`StatSystem.cs`](./Scripts/Systems/StatSystem.cs)
+> 필드 카드들로부터 교주·상징 스탯을 재계산
+
+이벤트 기반으로, 스탯이 변경되는 모든 시점에 `AfterChange`를 호출하여 이벤트를 전파하는 간단한 구조입니다.
+
+```csharp
+private void AfterChange(Player player, PlayerState p, string reason)
+{
+    Debug.Log(
+        $"[StatSystem] {player} {reason} → Cultist: {p.Cultist}, " +
+        $"Strength: {p.Symbols[(int)Symbols.Strength]}, " +
+        $"Unity: {p.Symbols[(int)Symbols.Unity]}");
+
+    _gameRuleSystem?.CheckStatConditions();
+}
+```
+
+##### [`GameRuleSystem.cs`](./Scripts/Systems/GameRuleSystem.cs)
+> 승/패 조건 판정·플레이어 탈락·게임 종료 결정
+
+게임의 규칙에 따라 승리 및 패배를 분석합니다. 게임의 특수 승리인 만신전, 모든 덱이 끝났을 경우 나오는 사기사를 이용한 승패 구분 로직 그리고 신도수 제거로 마지막 남은1인이 된 사람이 승리하는 로직까지 구현해두었습니다.
+
+사기사 승리의 경우 [만신전이 더 많은 사람 → 신도수가 더 많은사람 → 후턴] 순서로 승리자가 결정됩니다.
+
+<br>
+
+---
+
+<br>
