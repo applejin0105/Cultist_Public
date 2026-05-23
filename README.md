@@ -1878,7 +1878,7 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 ---
 
-#### A. 인터페이스·인프라
+### A. 인터페이스·인프라
 
 #### [`IEffectGameState.cs`](./Scripts/Effects/Core/IEffectGameState.cs)
 > 효과 시스템이 게임 상태와 연결된 유일한 창구
