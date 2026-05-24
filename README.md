@@ -2562,10 +2562,10 @@ flowchart TD
     Mirror --> C3_GP
 
     %% 스타일링
-    classDef host fill:#fdf4f4,stroke:#d9534f,stroke-width:2px;
-    classDef client fill:#f4f8fd,stroke:#5bc0de,stroke-width:2px;
-    classDef state fill:#fff,stroke:#ccc,stroke-dasharray: 5 5;
-    classDef mirror fill:#fff3cd,stroke:#f0ad4e,stroke-width:2px;
+    classDef host fill:#000000,stroke:#000000,stroke-width:2px;
+    classDef client fill:#000000,stroke:#000000,stroke-width:2px;
+    classDef state fill:#000000,stroke:#000000,stroke-dasharray: 5 5;
+    classDef mirror fill:#000000,stroke:#000000,stroke-width:2px;
 
     class Host host;
     class Client1,Client2,Client3 client;
@@ -2626,9 +2626,9 @@ flowchart TD
     Step8 -. "TCS 결과 세팅\n(await 해제)" .-> Step1
 
     %% 스타일링
-    classDef host fill:#fdf4f4,stroke:#d9534f,stroke-width:2px;
-    classDef client fill:#f4f8fd,stroke:#5bc0de,stroke-width:2px;
-    classDef network fill:#fff3cd,stroke:#f0ad4e,stroke-width:2px;
+    classDef host fill:#000000,stroke:#000000,stroke-width:2px;
+    classDef client fill:#000000,stroke:#000000,stroke-width:2px;
+    classDef network fill:#000000,stroke:#000000,stroke-width:2px;
 
     class Host_Req,Host_Res host;
     class Client client;
