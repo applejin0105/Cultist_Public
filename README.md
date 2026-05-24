@@ -2350,3 +2350,384 @@ private void AfterChange(Player player, PlayerState p, string reason)
 ---
 
 <br>
+
+#### RPC 작동 원리와 메커니즘 B 복습
+
+[RPC(Remote Procedure Call,원격 프로시저 호출)란, 별도의 원격 제어를 위한 코딩 없이 *다른 주소 공간에서 **함수나 프로시저**를 실행할 수 있게 하는 프로세스 간 통신 기술*을 말합니다. 즉, RPC를 이용하면 프로그래머는 함수 또는 프로시저가 실행 프로그램이 존재하는 로컬 위치에 있든, 원격 위치에 있든 상관없이 동일한 기능을 수행할 수 있습니다.](https://co-no.tistory.com/entry/%ED%86%B5%EC%8B%A0-RPCRemote-Procedure-Call%EC%9D%98-%EA%B0%9C%EB%85%90-%EB%B0%8F-%ED%8A%B9%EC%A7%95)
+
+쉽게 말해, 멀리 있는(`Remote`) 서버의 함수(`Procedure`)를, 마치 내 컴퓨터에 있는 함수처럼 호출(`Call`)하는 기술입니다. 핵심은 개발자가 네트워크 통신의 복잡한 과정(소켓 연결, HTTP 통신, 데이터 파싱 등)을 몰라도, 익숙한 '함수 호출' 방식으로 다른 컴퓨터와 통신할 수 있게 해주는 것입니다.
+
+멀티플레이에서는 호스트의 RAM과 클라이언트의 RAM과 다른 플레이어의 RAM이 물리적으로 다른 위치에 있습니다. 즉, *변수 하나를 공유할 수 없습니다.*
+
+이게 네트워크의 핵심 문제입니다. 내가 마우스로 카드를 클릭해도, 그 클릭 이벤트는 내 컴퓨터에만 존재합니다. 네트워크에서는 **컴퓨터끼리 정보를 주고받을 방법이 있어야 게임이 성립**합니다.
+
+요약해보면, 하나의 게임 씬을 공유하며 네트워크 게임을 플레이 위해서는 동일한 함수를 사용해야 하지만 동일한 RAM을 사용하여 물리적으로 떨어진 컴퓨터간의 공유는 할 수 없기에, RPC를 사용하는 것입니다.
+
+가령, RPC를 사용하지 않는 상황에서 다음과 같은 상황이 았다고 생각해봅시다.
+
+```
+P2 컴퓨터 (클라이언트):
+   사용자가 "메시아" 카드 클릭
+   InGameCardUI.OnLeftClick 실행됨
+   ... 그래서 뭐?
+```
+
+P2는 그냥 자기 컴퓨터의 변수를 바꾼 사람이됩니다(슬픔). 호스트의 게임 상태는 P2의 컴퓨터에 없기에 그냥 P2 혼자 '내 카드를 뒤집겠다'라고 시도해봤자 호스트도 모르고, 다른 플레이어도 알 방법이 없습니다.
+
+이를 해결하기 위해서는 P2가 호스트에게 '나 이거 뒤집고 싶어'라고 메시지를 보내야합니다
+    → `Cmd_RevealCard` (Command RPC)
+
+호스트의 효과 코드가 P3한테 카드 선택을 시키고 싶다면 
+
+```
+호스트:
+   effect 코드: var card = await _input.SelectCardToKeepAsync(P3, ...)
+   ... 어떻게 P3의 화면에 UI를 띄우지?
+```
+
+호스트는 *자기 컴퓨터의* UI만 띄울 수 있습니다. P3의 모니터는 호스트가 직접 접근할 수 없는 다른 컴퓨터입니다.
+
+이를 해결하기 위해서는호스트가 P3 클라이언트한테 "사용자한테 카드 선택 UI 보여줘" 라고 메시지를 보내야 합니다.
+    → `TargetRpc_RequestSelectCardToKeep` (TargetRpc)
+
+이번에는 호스트가 카드 한 장을 파괴하는 경우를 생각해봅시다.
+
+```
+호스트:
+   GameState의 카드 상태가 FieldBack → FieldDestroyed로 변경됨
+   ... 그래서 다른 사람들 화면에서는 어떻게 사라지지?
+```
+
+다른 플레이어들 화면에는 여전히 카드가 살아 있게 표시됩니다. 그들의 컴퓨터에는 호스트의 `GameState`가 없으니까요(`GameState`는 오직 호스트만!).
+
+이를 해결하기 위해서는 호스트가 모든 클라이언트한테 "이 카드 이제 파괴됨" 이라고 알려야 합니다.
+    → `SyncList` 갱신 (이것도 일종의 자동 RPC)
+
+여기까지 보면, 익숙한 무언가가 떠오를 것입니다. 바로 앞에서 [`데이터 흐름 및 통신 방식`](#데이터-흐름-및-통신-방식)을 설명하면서 이야기했던, 게임 진행 중 통신에서 설명한 메커니즘 B가 그대로 들어가있습니다. 처음 설명했던 부분 중 해당 부분을, 지금 코드와 함께 설명하기 전 조금 더 자세히 풀어서 설명하고 있습니다!
+
+그러니깐, 이 RPC라는 놈은 선택이 아닌 필수입니다. 컴퓨터끼리 메모리 공유가 없는 한, 정보를 주고받으려면 네트워크로 메시지를 보내야 하빈다. 그 메시지를 함수 호출처럼 보이게 감싸준 것이 RPC입니다.
+
+만약에 RPC를 안쓴다? 그럼 소켓을 직접 짜거나(고통) HTTP 요청을 보내야 하는데 그럼 REST API처럼 매번 연결 열고 닫고, 응답 기다리고... 실시간 게임에서 쓸 방법으로는 너무너무너무 느립니다. **RPC는 이 두 방식의 귀찮은 부분을 전부 다 자동화하고 있습니다. Mirror가 함수 인자를 자동으로 직렬화하고, 네트워크로 전송하고, 반태편에서 다시 함수 호출 형태로 복원**해줍니다. 그래서 코드를 짤때는 그냥 어트리뷰트 하나 딸깍 붙여주면 끝!입니다.
+
+그럼 이 RPC가 어디에 쓰이는지는, 각 어트리뷰트에 따라 다르겠지만 머릿속에 어느정도 그려지게 됩니다.
+
+| 어트리뷰트 | 누가 부르면 | 누가 실행 | 우리 게임에서 쓰이는 자리 (역할) | 구체적 예시 |
+| :--- | :--- | :--- | :--- | :--- |
+| **[Command]** | 클라이언트가 부르면 | 호스트가 실행 | 사용자 행동을 호스트에 전달 | 카드 클릭, Draw/Trade 선택, 카드 뒤집기 |
+| **[TargetRpc]** | 호스트가 부르면 | 지정한 클라이언트가 실행 | 호스트가 특정 플레이어한테 UI 띄우기 요청 | "P2야, 카드 한 장 골라줘" |
+| **[ClientRpc]** | 호스트가 부르면 | 모든 클라이언트가 실행 | 전체에 같은 효과음 / 연출 적용 | 사기사 강림 효과음 |
+| **[SyncVar] / SyncList** | 호스트가 값을 바꾸면 | 모든 클라이언트에 자동 반영 | 게임 상태 자동 동기화 | 카드 위치, 신도수, 좌석 번호 |
+
+가령 P1이 카드를 한 장 뒤집을 때는 다음과 같이 작동하게 됩니다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor P1_User as P1 플레이어
+    participant P1_Cl as [P1 컴퓨터] 클라이언트
+    participant Host as [호스트 컴퓨터] 서버
+    participant All_Cl as [모든 클라이언트] P1, P2, P3...
+
+    %% 1단계: P1 클라이언트에서의 입력 및 전송
+    Note over P1_User, P1_Cl: [P1의 컴퓨터 — 클라이언트]
+    P1_User->>P1_Cl: 카드 마우스 왼쪽 클릭
+    Note over P1_Cl: InGameCardUI.HandleLeftClick()<br/>localPlayer.Cmd_RevealCard(InstanceId)
+    
+    %% 네트워크 전송 ([Command])
+    P1_Cl-->>Host: [Command] 네트워크 전송
+    
+    %% 2단계: 호스트(서버)에서의 처리 및 데이터 갱신
+    Note over Host: [호스트의 컴퓨터 — 서버]
+    rect rgba(0, 120, 255, 0.1)
+        Note over Host: GamePlayer.Cmd_RevealCard() 실행<br/>_controller.ExecuteRevealCard(seat, instanceId)
+        Host->>Host: 진짜 GameState 변경 (카드 상태 -> FieldFront)
+        Host->>Host: SyncCards 리스트 갱신
+    end
+
+    %% 네트워크 방송 (SyncList)
+    Host-->>All_Cl: [SyncList] 모든 클라이언트에 자동 브로드캐스트 (방송)
+
+    %% 3단계: 모든 클라이언트의 화면 갱신
+    Note over All_Cl: [모든 클라이언트의 컴퓨터]
+    rect rgba(0, 200, 100, 0.1)
+        Note over All_Cl: 각 클라이언트의 SyncCards 새 값 수신
+        Note over All_Cl: ClientCardManager.OnSyncCardsChanged<br/>→ _isDirty = true
+        Note over All_Cl: 다음 LateUpdate 실행 시<br/>카드 UI가 face-up(앞면) 모양으로 최종 갱신
+    end
+```
+- `[Command]`: P1의 클릭을 호스트에 전달 (없으면 호스트가 클릭을 모름)
+- SyncList: 자동 동기화. 호스트의 상태 변경을 모든 클라에 전달 (없으면 다른 사람 화면에서는 카드가 안 뒤집힘)
+
+카드 효과로 P2한테 카드를 골라달라고 요청할 때는 다음과 같이 작동하게 됩니다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Host as [호스트] 서버
+    participant P2_Cl as [P2 컴퓨터] 클라이언트
+    actor P2_User as P2 플레이어
+
+    %% 1단계: 호스트의 요청 시작 및 TargetRpc 발송
+    Note over Host: [호스트 컴퓨터]
+    rect rgba(0, 120, 255, 0.1)
+        Note over Host: 1) 효과(Effect) 코드 실행 중<br/>var card = await _input.SelectCardToKeepAsync(P2, candidates)
+        Note over Host: 2) RemotePlayerInputProvider가<br/>P2의 GamePlayer를 통해 RPC 호출
+    end
+    
+    %% 네트워크 전송 ([TargetRpc])
+    Host-->>P2_Cl: [TargetRpc] RequestSelectCardToKeep(...) 전송
+    
+    %% 2단계: P2 클라이언트의 UI 표시 및 유저 입력
+    Note over P2_Cl: [P2의 컴퓨터 — 클라이언트]
+    rect rgba(0, 200, 100, 0.1)
+        Note over P2_Cl: 3) TargetRpc_RequestSelectCardToKeep 실행<br/>DraftUIManager.ShowDraft(...)
+        P2_Cl->>P2_User: 화면에 드래프트 UI 띄우기
+        P2_User->>P2_Cl: 4) 카드 클릭 (선택 완료)
+        Note over P2_Cl: localPlayer.Cmd_SubmitKeepCard(id)
+    end
+
+    %% 네트워크 전송 ([Command])
+    P2_Cl-->>Host: [Command] Cmd_SubmitKeepCard(id) 전송
+
+    %% 3단계: 호스트의 데이터 수신 및 await 해제
+    Note over Host: [호스트 컴퓨터]
+    rect rgba(0, 120, 255, 0.1)
+        Note over Host: 5) Cmd_SubmitKeepCard 실행<br/>_remoteInput.ReceiveKeepCardResponse(id)
+        Note over Host: 6) TaskCompletionSource.SetResult(id)<br/>🚨 1번의 await 대기가 풀림!
+        Note over Host: 효과(Effect) 코드 다음 라인 계속 진행
+    end
+```
+- `[TargetRpc]`: 호스트가 P2에게만 "UI 보여줘" 메시지 전송
+- `[Command]`: P2의 답을 호스트로 전송
+
+이러한 전체 흐름을 보고, 이제 이 다이어그램을 보면 전체 네트워크를 대략적으로 이해할 수 있습니다!!!!
+
+전체 흐름
+```mermaid
+flowchart TD
+    subgraph Host ["호스트 (방장 = 서버 + 본인 클라이언트)"]
+        direction TB
+        subgraph GameState ["진짜 게임 상태 (GameState)"]
+            direction TB
+            Data["Cards, Players, Field, Symbols, ..."]
+            Effect["Effect 시스템 (await로 사용자 입력 대기 가능)"]
+        end
+
+        InputProvider["RemotePlayerInputProvider\n(TCS 관리)"] <--> Controller["NetworkGameController\n(게임 단위 라우팅 + 동기화)"]
+
+        GameState ~~~ InputProvider
+
+        subgraph HostPlayers [" "]
+            direction LR
+            HP1["GamePlayer(P1)"]
+            HP2["GamePlayer(P2)"]
+            HP3["GamePlayer(P3)"]
+        end
+        
+        InputProvider ~~~ HostPlayers
+    end
+
+    Mirror{{"Mirror가 자동 동기화"}}
+
+    HP1 --> Mirror
+    HP2 --> Mirror
+    HP3 --> Mirror
+
+    subgraph Client1 ["P1 클라"]
+        direction TB
+        C1_GP["GamePlayer\n(각자 자기 사본)"]
+        C1_CM["ClientCardMgr\n(UI 그리는 곳)"]
+        C1_UI["UI"]
+        C1_GP --- C1_CM --- C1_UI
+    end
+
+    subgraph Client2 ["P2 클라"]
+        direction TB
+        C2_GP["GamePlayer\n(각자 자기 사본)"]
+        C2_CM["ClientCardMgr\n(UI 그리는 곳)"]
+        C2_UI["UI"]
+        C2_GP --- C2_CM --- C2_UI
+    end
+
+    subgraph Client3 ["P3 클라"]
+        direction TB
+        C3_GP["GamePlayer\n(각자 자기 사본)"]
+        C3_CM["ClientCardMgr\n(UI 그리는 곳)"]
+        C3_UI["UI"]
+        C3_GP --- C3_CM --- C3_UI
+    end
+
+    Mirror --> C1_GP
+    Mirror --> C2_GP
+    Mirror --> C3_GP
+
+    %% 스타일링
+    classDef host fill:#fdf4f4,stroke:#d9534f,stroke-width:2px;
+    classDef client fill:#f4f8fd,stroke:#5bc0de,stroke-width:2px;
+    classDef state fill:#fff,stroke:#ccc,stroke-dasharray: 5 5;
+    classDef mirror fill:#fff3cd,stroke:#f0ad4e,stroke-width:2px;
+
+    class Host host;
+    class Client1,Client2,Client3 client;
+    class GameState state;
+    class Mirror mirror;
+```
+
+그럼 이제, 이러한 이해를 바탕으로 네트워크 관련 코드를 박★살 내보도록 하겠습니다.
+
+#### Chapter 6. 비동기 플레이어 입력 처리
+> `TaskCompletionSource` RPC 기반 `await` 처리
+
+우선, Chapter 6의 전체적인 흐름을 다이어그램으로 깔끔하게 보고 시작하겠습니다.
+
+Chapter 6 다이어그램
+```mermaid
+flowchart TD
+    subgraph Host_Req ["호스트 (요청 단계)"]
+        direction TB
+        Step1["① 효과 코드\nvar card = await _input.SelectCardToKeepAsync(P2, ...)"]
+        Step2["② RemotePlayerInputProvider\n- KeepCardTcs (TaskCompletionSource) 생성\n- TargetRpc_RequestSelectCardToKeep 호출\n- tcs.Task 반환 (여기서 효과 코드는 대기 상태 돌입)"]
+        
+        Step1 -->|인터페이스 호출| Step2
+    end
+
+    Net1{{"※ 네트워크 (TargetRpc) ※\nMirror가 P2 클라이언트로 전송"}}
+
+    Step2 --> Net1
+
+    subgraph Client ["P2 클라이언트"]
+        direction TB
+        Step3["③ GamePlayer.TargetRpc_RequestSelectCardToKeep 실행\n→ OnTargetSelectionRequested 이벤트 발화"]
+        Step4["④ ClientCardManager / DraftUIManager\n→ 사용자에게 카드 선택 UI 표시"]
+        Step5["⑤ 사용자 클릭\n→ InGameCardUI → ClientCardManager\n→ localPlayer.Cmd_SubmitKeepCard(선택한_id) 호출"]
+
+        Step3 --> Step4 --> Step5
+    end
+
+    Net1 --> Step3
+
+    Net2{{"※ 네트워크 (Command) ※\nMirror가 호스트로 전송"}}
+
+    Step5 --> Net2
+
+    subgraph Host_Res ["호스트 (응답 처리 단계)"]
+        direction TB
+        Step6["⑥ GamePlayer.Cmd_SubmitKeepCard 실행\n→ _controller.OnClientSubmitKeepCard(id) 호출"]
+        Step7["⑦ NetworkGameController\n→ _remoteInput.ReceiveKeepCardResponse(id)"]
+        Step8["⑧ RemotePlayerInputProvider\n→ 대기 중이던 KeepCardTcs.TrySetResult(id) 호출"]
+        Step9["⑨ ①의 await가 풀림!\n← 카드 객체를 전달받아 멈춰있던 효과 코드 마저 진행"]
+
+        Step6 --> Step7 --> Step8 --> Step9
+    end
+
+    Net2 --> Step6
+    
+    %% TCS await 해제 흐름을 시각적으로 강조하는 점선
+    Step8 -. "TCS 결과 세팅\n(await 해제)" .-> Step1
+
+    %% 스타일링
+    classDef host fill:#fdf4f4,stroke:#d9534f,stroke-width:2px;
+    classDef client fill:#f4f8fd,stroke:#5bc0de,stroke-width:2px;
+    classDef network fill:#fff3cd,stroke:#f0ad4e,stroke-width:2px;
+
+    class Host_Req,Host_Res host;
+    class Client client;
+    class Net1,Net2 network;
+```
+
+Chapter 6은 *플레이어 입력 처리* 입니다. 호스트가 특정 플레이어에게 카드 선택을 요청하고, 답이 올 때까지 `await`로 기다리는 흐름입니다.
+
+효과 코드 입장에서는 `await SelectCardToKeepAsync(...)` 한 줄로 끝납니다. 그 사이에 네트워크 왕복이 일어나든 말든 효과 코드는 신경 쓸 필요가 없습니다. 이걸 가능하게 만드는 게 `TaskCompletionSource`로, *답이 올 때까지 깨우지 마* 라는 의미의 Task를 만들어 효과 코드에 넘기는 도구입니다.
+
+---
+
+<br>
+
+---
+
+##### [`RemotePlayerInputProvider.cs`](./Scripts/App/Network/RemotePlayerInputProvider.cs)
+> 호스트 코드가 await 한 줄로 응답을 기다릴 수 있게, RPC 요청과 응답 사이를 Task로 묶어주는 어댑터
+
+- 보통 `Task`는 *내가 비동기로 일하다 끝나면 알려줄게* 패턴이라 스스로 끝납니다.
+- TCS는 반대로 *외부에서 완료 신호를 줄 때까지 기다리는 Task를 직접 만들 수 있게* 해줍니다.
+
+```csharp
+var tcs = new TaskCompletionSource<int>();   // 미완성 Task 만들기
+// ... 어딘가에서 tcs.SetResult(42) 호출되면 ...
+int result = await tcs.Task;                  // 그 순간 await가 풀리고 42 받음
+```
+
+RPC 응답처럼 *외부 이벤트를 기다려야 하는* 상황에 딱 맞는 도구입니다. 이 클래스는 입력 종류별로 TCS를 멤버 필드로 들고 있고, 각 입력마다 **요청 메서드 + 응답 메서드** 가 짝을 이룹니다.
+
+| 요청 (효과 코드가 부름) | 응답 (Controller가 부름) |
+| --- | --- |
+| SelectTargetsAsync | ReceiveTargetResponse |
+| SelectDrawPhaseAsync | ReceiveDrawActionResponse |
+| SelectCardToKeepAsync | ReceiveKeepCardResponse |
+| SelectCardFromTradeAsync | ReceiveTradeSelectResponse |
+
+패턴은 모두 같습니다. *요청 쪽은 TCS 만들고 → RPC 보내고 → Task 반환*, *응답 쪽은 TCS에 SetResult 호출*. 그게 전부입니다.
+
+대표로 `SelectCardToKeepAsync` 하나만 뜯어봅시다. *호스트에서 P2한테 후보 N장 중 하나 골라달라고 부탁하고, 답이 올 때까지 기다리는 Task를 반환하는* 함수입니다.
+
+```csharp
+public Task<CardInstance> SelectCardToKeepAsync(Player player, List<CardInstance> cardInstances)
+{
+    _keepCardTcs = new TaskCompletionSource<int>();   // ① 미완성 Task 발급
+
+    // 객체는 무거우니까 네트워크로 보낼 int 배열로 추림
+    var ids = cardInstances.Select(c => c.InstanceId).ToArray();
+    var cardIds = cardInstances.Select(c => c.CardId).ToArray();
+
+    // 해당 플레이어 클라이언트에게 UI 띄우라고 RPC 발사
+    var gamePlayer = _controller.GetPlayerComponent(player);
+    if (gamePlayer != null) gamePlayer.TargetRpc_RequestSelectCardToKeep(ids, cardIds);
+    else _keepCardTcs.SetResult(ids.FirstOrDefault());   // 비정상 시 첫 카드 자동 선택
+
+    // 답(int)이 오면 CardInstance로 변환해서 호출자에게 돌려줌
+    return _keepCardTcs.Task.ContinueWith(t =>
+        _controller.ServerGameState.Cards.GetValueOrDefault(t.Result));
+}
+```
+
+읽을 때 짚어둘 포인트 세 가지만 짚고 넘어가겠습니다.
+
+**TCS가 `<int>`인 이유.** 클라이언트는 응답으로 카드 객체 통째로가 아니라 `InstanceId`(int) 만 보냅니다. 객체엔 다른 객체 참조가 잔뜩 달려 있어 네트워크로 통째로 못 보내거든요. 앞서 굳이굳이 InstanceId 생성기를 만들어 둔 이유가 여기서 드러납니다.
+
+**`ContinueWith`로 한 번 더 감싼 이유.** `_keepCardTcs.Task`는 *int* 를 돌려주는 Task인데, 호출자가 받고 싶은 건 *CardInstance* 객체입니다. `ContinueWith`는 *이 Task가 완성되면 그 결과를 람다에 통과시켜서 새 Task를 만들어줘* 라는 변환기입니다. 즉 `int → CardInstance` 변환 책임을 입력 제공자가 끝까지 짊어지고, 호출자는 `await` 한 줄로 깔끔하게 객체를 받습니다.
+
+**`else`의 SetResult.** `GamePlayer`를 못 찾는 비정상 상황(네트워크 끊김 등)에는 첫 카드를 자동 선택하면서 `SetResult`를 즉시 부릅니다. Task가 그 자리에서 완성되니 효과 시퀀스가 멈추지 않고 굴러갑니다.
+
+응답 쪽은 정말 한 줄입니다.
+
+```csharp
+public void ReceiveKeepCardResponse(int selectedInstanceId) =>
+    _keepCardTcs?.TrySetResult(selectedInstanceId);
+```
+
+`TrySetResult`가 호출되는 순간 위 Task가 *완성* 상태로 바뀌고, 효과 코드의 `await`가 풀립니다.
+
+조금 특이한 케이스가 `ReceiveTradeSelectResponse`입니다. *Draw/Trade 선택 단계* 에서 사용자가 교역소 카드를 곧바로 클릭하면 두 가지(① Trade를 하기로 함, ② 이 카드로 Trade함)가 동시에 결정됩니다. 이때 `_pendingTradeCardId`에 카드 ID를 잠시 보관해 두고, 다음 `SelectCardFromTradeAsync`가 호출되는 순간 그 값을 결과로 흘려줍니다. 한 클릭으로 두 단계가 이어지는 UX를 위한 처리입니다.
+
+##### [`IPlayerInputProvider.cs`](./Scripts/Effects/Interfaces/IPlayerInputProvider.cs)
+> 효과 시스템의 플레이어 입력 요청 용 인터페이스. 네트워크가 어떻게 돌든 효과 쪽은 모르게 가려둠
+
+효과 시스템이 *플레이어한테 카드 하나 골라 달라* 같은 입력을 요청할 때 부르는 인터페이스입니다. 4개 메서드만 정의하고 실제 구현은 다른 파일에 맡깁니다.
+
+| 메서드 | 의미 |
+| --- | --- |
+| SelectTargetsAsync | 카드 효과의 타겟을 N장 골라 달라 |
+| SelectDrawPhaseAsync | Draw / Trade 중 어느 행동을 할지 |
+| SelectCardToKeepAsync | 드래프트에서 한 장 골라 달라 |
+| SelectCardFromTradeAsync | 교역소에서 한 장 골라 달라 |
+
+전부 `Task<...>`를 반환해서, 효과 코드는 `var result = await _input.SelectCardToKeepAsync(...)` 한 줄로 답을 기다릴 수 있습니다.
+
+인터페이스로 분리한 이유는 효과 시스템이 *누가 어떻게 사용자한테 물어보는지* 알 필요가 없어서입니다. 멀티플레이면 RPC 왕복, 자동 테스트면 미리 정해둔 값을 돌려주는 식으로 구현을 갈아끼울 수 있게 구현했습니다.
+
+
+<br>
+
+---
+
+<br>
