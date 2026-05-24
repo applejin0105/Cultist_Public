@@ -2493,7 +2493,7 @@ sequenceDiagram
     Note over Host: [호스트 컴퓨터]
     rect rgba(0, 120, 255, 0.1)
         Note over Host: 5) Cmd_SubmitKeepCard 실행<br/>_remoteInput.ReceiveKeepCardResponse(id)
-        Note over Host: 6) TaskCompletionSource.SetResult(id)<br/>🚨 1번의 await 대기가 풀림!
+        Note over Host: 6) TaskCompletionSource.SetResult(id)<br/> 1번의 await 대기가 풀림!
         Note over Host: 효과(Effect) 코드 다음 라인 계속 진행
     end
 ```
