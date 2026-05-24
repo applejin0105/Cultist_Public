@@ -2731,3 +2731,325 @@ public void ReceiveKeepCardResponse(int selectedInstanceId) =>
 ---
 
 <br>
+
+#### Chapter 7. 서버 권위 상태 동기화
+> 서버 `GameState`, 클라이언트 복제
+
+여기서도 Chapter 7의 전체적인 흐름을 다이어그램으로 깔끔하게 보고 시작하겠습니다.
+
+Chapter 7 다이어그램
+```mermaid
+flowchart TD
+    subgraph Host ["호스트 (Host)"]
+        direction TB
+        Step1["① 효과 코드: Destroy 명령 실행\n(GameState의 Card 상태가 FieldBack → FieldDestroyed)"]
+        Step2["② NetworkGameController.SyncCards 갱신\n- SyncList<CardNetData> 안의 해당 카드 entry 수정\n- (호스트에서 SyncList를 건드리는 순간)"]
+        
+        Step1 --> Step2
+    end
+
+    Network{{"※ 네트워크 (Mirror 자동) ※\n변경 사항을 전 클라에 방송"}}
+
+    Step2 --> Network
+
+    subgraph Client ["모든 클라이언트 (P1, P2, P3, ...)"]
+        direction TB
+        Step3["③ 각 클라의 SyncCards가 새 값을 받음\n(SyncCards.OnChange 이벤트 발화)"]
+        Step4["④ ClientCardManager\n(_isDirty = true 만 세움: 이번 프레임에 바뀐 게 있다)"]
+        Step5["⑤ LateUpdate (다음 프레임 끝)\n- SyncCardsChanged() 한 번 호출\n- SyncCards를 훑으면서:\n  • 새 카드면 Instantiate\n  • 있던 카드면 Setup으로 데이터 갱신\n  • 없어진 카드면 Destroy\n  • 적절한 부모(손/교역소/필드)에 붙임"]
+        Step6["⑥ 화면이 새 상태를 반영"]
+
+        Step3 --> Step4 --> Step5 --> Step6
+    end
+
+    Network --> Step3
+
+    %% 스타일링
+    classDef host fill:#000000,stroke:#000000,stroke-width:2px;
+    classDef client fill:#000000,stroke:#000000,stroke-width:2px;
+    classDef network fill:#000000,stroke:#000000,stroke-width:2px;
+
+    class Host host;
+    class Client client;
+    class Network network;
+```
+
+##### [`NetworkDTOs.cs`](./Scripts/App/Network/NetworkDTOs.cs)
+> 네트워크로 주고받을 때 쓰는 가벼운 카드·플레이어 정보 묶음. 원본 객체를 통째로 보내지 않고 필요한 값만 추려둠
+
+네트워크로 카드·플레이어 정보를 주고받을 때 쓰는 가벼운 구조체입니다. 원본 객체(`CardInstance` 등)는 다른 객체에 대한 참조도 들고 있어서 통째로 보내기엔 무겁기 때문에, 필요한 값만 추려서 클래스로 만들어두었습니다.
+
+##### [`GameNetworkManager.cs`](./Scripts/App/Network/GameNetworkManager.cs)
+> 게임이 시작되거나 누군가 접속·종료될 때 어떤 일이 일어날지 정해두는 진입점. 플레이어 객체 생성도 여기서
+
+Mirror의 `NetworkManager`를 상속받은, 짧은 클래스입니다. 서버 켜기/끄기, 접속/끊김, 플레이어 프리팹 스폰 같은 복잡한 일은 부모(`NetworkManager`)가 다 해주고, 여기선 *이 게임만의 특별한 동작* 만 `override`로 끼워 넣습니다.
+
+서버가 켜질 때:
+
+```csharp
+public override void OnStartServer()
+{
+    base.OnStartServer();
+    GameObject controllerObj = Instantiate(gameControllerPrefab.gameObject);
+    NetworkServer.Spawn(controllerObj);
+}
+```
+
+`NetworkGameController` 프리팹을 하나 만들고 네트워크에 등록합니다. `NetworkServer.Spawn`은 *이 객체를 모든 클라이언트에도 자동으로 만들어 줘* 라는 명령이라, 한 줄로 모든 클라이언트 화면에 같은 컨트롤러 객체가 생깁니다.
+
+누군가 접속할 때마다
+
+```csharp
+public override void OnServerAddPlayer(NetworkConnectionToClient conn)
+{
+    GameObject playerObj = Instantiate(playerPrefab);
+    NetworkServer.AddPlayerForConnection(conn, playerObj);
+}
+```
+
+플레이어 프리팹(아래에서 자세히 설명할 `playerPrefab`)을 만들고, *이 객체는 이 접속자의 소유다* 라고 Mirror에 등록합니다. 이 *소유권(authority)* 이 있어야 그 클라이언트가 자기 `GamePlayer`를 통해 `[Command]`를 보낼 수 있습니다.
+
+마지막으로 UI 버튼에서 부르는 진입점 두 개가 있습니다.
+
+```csharp
+public void StartHostGame()           => StartHost();
+public void StartClientGame(string a) { networkAddress = a; StartClient(); }
+```
+
+`StartHost`, `StartClient`는 Mirror가 제공하는 기본 메서드를 UI 버튼에 연결하기 좋게 public으로 감싸 `NetworkManager`의 `StartHost`와 `StartClient`를 호출할 뿐입니다. 호스트는 *한 프로세스 안에서 서버 + 클라이언트를 같이 돌리는 모드*(방장 본인이 서버 역할도 함)이고, Client는 다른 호스트에 접속만 하는 쪽입니다.
+
+##### [`GamePlayer.cs`](./Scripts/App/Network/GamePlayer.cs)
+> (입력 측면) 호스트가 보낸 입력 요청 RPC를 받고, 사용자가 고른 결과를 다시 호스트로 보내는 통로
+
+게임에 접속한 플레이어 한 명당 하나씩 만들어지는 객체로, 호스트와 모든 클라이언트가 각자 사본을 들고 있습니다. 역할은 두 가지입니다.
+
+- 호스트 → 특정 클라이언트로 "카드 좀 골라달라"는 요청 (`TargetRpc_Request*`)
+- 클라이언트 → 호스트로 "이거 골랐어요" 답 (`Cmd_Submit*`)
+
+이 둘이 한 쌍을 이뤄 RPC 왕복을 만듭니다. 앞에서 이미 설명했지만, 게임에서 *플레이어 입력이 필요한 순간* 은 이 네 쌍이 전부입니다.
+
+| 요청 RPC (호스트 → 클라) | 응답 Command (클라 → 호스트) | 시나리오 |
+| --- | --- | --- |
+| TargetRpc_RequestSelectTargets | Cmd_SubmitTargets | 카드 효과의 타겟 선택 |
+| TargetRpc_RequestDrawAction | Cmd_SubmitDrawAction | Draw vs Trade 선택 |
+| TargetRpc_RequestSelectCardToKeep | Cmd_SubmitKeepCard | 드래프트에서 1장 픽 |
+| TargetRpc_RequestSelectCardFromTrade | Cmd_SubmitTradeSelect | 교역소에서 1장 픽 |
+
+`Cmd_Submit*` 안쪽은 모두 같은 패턴으로, 받자마자 `NetworkGameController`로 그대로 넘깁니다.
+
+```csharp
+[Command]
+public void Cmd_SubmitKeepCard(int selectedId)
+{
+    if (_controller == null) _controller = FindFirstObjectByType<NetworkGameController>();
+    if (_controller != null) _controller.OnClientSubmitKeepCard(selectedId);
+}
+```
+
+즉 `GamePlayer`는 RPC가 들고나는 *창구* 일 뿐, 실제 라우팅(누구의 await를 깨울지)은 다음 파일(`NetworkGameController`)이 맡습니다. 프리팹은 `GameNetworkManager`의 `playerPrefab` 슬롯에 미리 할당해 두어 접속 시 자동 스폰됩니다.
+
+##### [`NetworkGameController.cs`](./Scripts/App/Network/NetworkGameController.cs)
+> 서버에서 게임 한 판을 처음부터 끝까지 들고 흘려보내는 *중앙 허브*. 시스템 소유 / 매치 시작 / 상태 동기화 / 입력 라우팅 / 게임 종료까지 한 자리에서 담당
+
+이 클래스는 챕터 7의 핵심인 `SyncFullGameState`까지 들고 있는 *서버 측 모든 것의 시작점* 입니다. 한번 하나씩, 전체 흐름에 맞춰서 설명해보겠습니다.
+
+**Fields & State**
+> 클래스가 들고 있는 모든 것을 *서버 전용 시스템 / 좌석 등록 dict / SyncVar+SyncList / 이벤트·상수* 4묶음으로 분리.
+
+서버 전용 시스템에는 `GameState` + `TurnSystem`/`PhaseSystem`/`GameActionSystem`/`GameRuleSystem`/`EffectsBootstrap`/`RemotePlayerInputProvider`가 들어 있어, 사실상 *서버 측 모든 시스템을 보유한 한 곳* 입니다. 지금까지 설명한, 서버에서 처리되어야 하는 모든 시스템이 들어있습니다.
+
+**1. Lifecycle & Initialization**
+> `Awake`에서 싱글톤 + `DontDestroyOnLoad` 등록 → `OnEnable`이 `sceneLoaded`를 구독 → `05_InGame` 씬이 켜지면 `ResetSession` → `WaitForPlayersToStartGame`을 발화.
+
+핵심은 `InitializeServerLogic`으로 이는 서버 시스템들을 *한 자리에서 생성·결선* 하는 DI 컨테이너 역할입니다(`_actionSystem.SetEffectRunner(...)` 같은 후속 결선까지 전부). `ResetSession`은 로비 ↔ 인게임 왕복 시 상태가 새도록 다시 한 번 부르는 안전 장치입니다.
+
+**2. Match Preparation**
+> `RegisterPlayer`로 접속한 GamePlayer를 좌석에 등록 → `WaitForPlayersToStartGame` 코루틴이 예상 인원만큼 모일 때까지 10초 폴링 → 도착하면 (시간 초과면 강제로) `StartGameLogic`을 호출.
+
+`StartGameLogic`은 좌석 순서대로 덱을 *Fisher-Yates 셔플* → `AddPlayer`로 상태에 등록 → 첫 `SyncFullGameState` → `RpcInitializeGameUI` → 1초 뒤 setup 턴 진입까지를 한 번에 처리합니다. 시간 간격을 둔 이유는 아무래도 네트워크 게임이다보니, 간격을 안주면 예상치 못하고 알 수 없는 이유로 지속적으로 연결이 끊기거나 작동하지 않는 버그가 있어서 이렇게 구성하였습니다.
+
+**3. Setup Turn (0번째 턴 — Root 공개)**
+> 1번 턴이 시작되기 전, 모든 플레이어가 본인의 *root 카드* 를 차례로 공개하는 의식 단계.
+
+`RunSetupTurnAsync`가 턴 순서대로 *필드 배치 → 0.5초 대기 → Reveal*을 반복합니다. `KickOffSetupTurn`은 Unity의 `Invoke(nameof(...))`가 `async Task`를 직접 못 받기 때문에 끼워둔 한 줄 우회 래퍼입니다.
+
+**4. Server Action Handlers** *(GamePlayer Cmd_* 진입점)*
+> `GamePlayer.Cmd_*`가 호스트에 들어오면 실제로 호출되는 다섯 진입점
+
+`ExecutePlayCard`/`Reveal`/`Use`/`AdvancePhase`/`TurnEnd`. 모두 같은 패턴입니다.
+
+```
+① 게임 종료 가드
+② 액티브 플레이어 확인
+③ 탈락자 차단
+④ _actionSystem에 실제 로직 위임
+⑤ SyncFullGameState
+```
+
+*클라이언트가 직접 GameState를 못 만지게* 하는 서버 권위(server-authoritative) 모델의 검문소들입니다.
+
+**5. State Synchronization** — **챕터 7의 핵심**
+> `SyncFullGameState`가 이 챕터 전체의 주인공입니다.
+
+호스트의 `ServerGameState.Cards`(Dictionary)를 평탄화해 `SyncList<CardNetData>`로 복사하면서, 필드 카드는 `ParentInstanceId`/`SiblingIndex`까지 계산해 *부모-자식 트리 정보* 를 담아 보냅니다. 동시에 모든 플레이어 대상으로 `RpcSyncPlayerStats`(심볼)도 송출합니다. `OnServerPhaseChanged`/`UpdateTurnSyncVars`는 SyncVar 갱신용 헬퍼, `OnStateChangedHook`은 SyncVar 변화를 `OnClientGameStateChanged` 이벤트로 끌어올려 UI들이 재구독할 수 있게 합니다.
+
+**6. UI Notification RPCs**
+> 상태가 아닌 *일회성 이벤트* 를 클라이언트로 흘리는 RPC들.
+
+`RpcInitializeGameUI` + `InitUIRoutine`(좌석-패널 매핑 + 모든 플레이어의 Steam 닉네임 로딩까지 최대 5초 폴링), `RpcSyncPlayerStats`(5번에서 자동 호출되는 심볼 갱신), `RpcNotifyTurnStart`(턴 시작 배너) 셋입니다.
+
+**7. Client Input Response Routing**
+> `OnClientSubmit*` 네 메서드가 `_remoteInput.Receive*Response`로 그대로 흘려보내는 한 줄짜리 라우터 (예: `OnClientSubmitKeepCard` → `ReceiveKeepCardResponse`).
+
+`GamePlayer → NetworkGameController → RemotePlayerInputProvider` 세 단계로 굳이 나눈 이유는 **책임 분리** 원칙 때문입니다. `GamePlayer`는 RPC 처리만, 본 클래스는 게임 단위 라우팅(좌석 ↔ 객체 매핑 등), `RemotePlayerInputProvider`는 TCS 관리만 맡게 해서, 새 입력이 생겨도 손볼 자리가 명확해집니다.
+
+**8. Game End**
+> 게임 종료 처리
+
+서버 측 `TriggerGameEnd`가 `winnerSeat`/`isGameEnded` SyncVar를 세팅 → 클라의 `OnGameEndedHook`이 자동 발화하면서 종료 UI + 승/패 사운드 재생 → 5초 뒤 `ReturnToLobbyAfterDelay` 코루틴이 `ServerChangeScene`으로 로비로 복귀시킵니다.
+
+**9. Public Lookup**
+외부에서 서버 시스템(`GetTurnSystem`)이나 좌석별 GamePlayer(`GetPlayerComponent`)를 조회할 때 쓰는 두 줄짜리 유틸 메서드.
+
+---
+
+정리해보면, *`ClientCardManager`가 받아서 그리는 쪽* 이라면 본 클래스의 **5번 region(`SyncFullGameState`)이 보내는 쪽** 입니다. 거기에 더해 *시스템 소유*, *매치 진행 코디네이션*, *명령 검문*, *게임 종료 전파* 까지 다 한 자리에서 처리하기 때문에, 챕터 7의 첫 다이어그램 ①~② 단계(호스트 측 GameState 변경 → SyncCards 갱신)가 사실상 이 클래스 안에서 다 일어난다고 보면 됩니다.
+
+##### [`ClientCardManager.cs`](./Scripts/Scenes/InGame/Core/ClientCardManager.cs)
+> 호스트가 뿌린 카드 정보가 바뀔 때마다 클라이언트 화면 위의 카드들을 다시 그리는 곳
+
+호스트의 *진짜 게임 상태* 는 `SyncCards`(`SyncList<CardNetData>`)에 담겨 모든 클라이언트로 자동 동기화됩니다. 이 파일은 그 데이터가 바뀔 때마다 **카드 UI 객체를 만들고/갱신하고/지워서** 화면을 일치시킵니다. 챕터 7에서 *방송을 받아 그림으로 옮기는* UI 마무리 단계입니다.
+
+코어 루프는 `SyncCards.OnChange` → 더티 플래그 → `LateUpdate`에서 한 번에 처리, 이 셋으로 구성됩니다.
+
+```csharp
+_controller.SyncCards.OnChange += OnSyncCardsChanged;
+private void OnSyncCardsChanged(...) { _isDirty = true; }
+private void LateUpdate() { if (_isDirty) { SyncCardsChanged(); _isDirty = false; } }
+```
+
+호스트 한 액션에서 카드 5장이 동시에 바뀌면 `OnChange`도 5번 발화하기에, 매번 다시 그리지 않고 *이번 프레임에 뭔가 바뀌었다* 만 플래그로 표시해 둔 뒤 `LateUpdate`에서 **한 번에 묶어** 다시 그립니다.
+
+`SyncCardsChanged` 안쪽 흐름은 단순합니다.
+
+```csharp
+foreach (var netData in _controller.SyncCards)
+{
+    if (!_spawnedCards.TryGetValue(netData.InstanceId, out var cardUI))   // 처음 보는 카드면 생성
+        _spawnedCards[netData.InstanceId] = cardUI = Instantiate(inGameCardPrefab);
+
+    cardUI.Setup(netData, isMine);                    // 데이터 적용
+    AssignParentTransform(cardUI, netData, isMine);   // 어느 영역에 둘지 결정
+}
+```
+
+핵심 자료구조는 `Dictionary<int, InGameCardUI> _spawnedCards`. InstanceId로 화면 위 UI 객체를 빠르게 찾기 위한 것입니다. 부모 자리는 `AssignParentTransform`이 `Zone`에 따라 정합니다.
+
+| netData.Zone | 들어갈 부모 |
+| --- | --- |
+| Hand (내 카드) | myHandTransform |
+| Trade | tradeGridTransform |
+| Field | 그 카드 주인의 필드 영역 |
+
+부모만 정해주면 Unity의 RectTransform/Layout이 알아서 위치를 잡으므로, 이 파일은 *어느 그릇에 담길지* 만 결정하고 *정확한 좌표* 는 신경 쓰지 않습니다.
+
+다만 필드는 손/교역소와 달리 **부모-자식 관계** 를 가집니다 (root 카드 위에 자식 카드들이 붙는 구조). 평면 리스트인 `SyncCards`의 `ParentInstanceId` 정보로 트리를 재구성해 `FieldLayoutManager`에 넘기고, 좌표 계산은 거기서 합니다.
+
+타겟 선택 모드도 이 파일에서 다룹니다. 호스트가 RPC를 보내면 `GamePlayer.OnTargetSelectionRequested`가 발화 → `StartTargetSelection`이 후보를 보관 → 사용자 클릭 시 `TrySelectTarget`이 후보·`singleOwner` 제약을 검사 → 요구 수량을 채우면 `Cmd_SubmitTargets` 전송. 챕터 6의 *호스트 RPC → 화면 모드 진입 → 사용자 클릭 → Cmd 응답* 고리가 여기서 완성됩니다.
+
+이 외 드래그 시 다른 손패 축소, ghost slot 표시, 카메라 포커스 같은 *화면을 보기 좋게 다듬는 보조 기능* 도 일부 포함되어 있는데, 호스트 게임 상태와는 무관한 클라이언트 UX 전용입니다.
+
+
+<br>
+
+---
+
+<br>
+
+## Ⅳ. 회고 및 마무리 (Conclusion)
+
+### 로드맵
+
+#### RoadMap01 멀티플레이 로비
+
+Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어보실 수 있습니다. 본격적인 멀티플레이 구성을 진입하기 전, 저는 다음과 같은 기준들을 세워보았습니다.
+1. 운영 비용 구조: 출시 전 검증되지 않은 단계에서, CCU(동시 접속자) 기반 반복 결제는 리스크이다.
+2. 플랫폼 적합성: 타겟 플랫폼이 Steam이므로, 친구 초대·오버레이 참여가 네이티브여야 한다.
+3. 로컬 플레이 보장: *기획자*의 요구는 '하나의 컴퓨터에서 여러개 쉽게 돌릴 수 있도록 테스트 환경을 제공해달라'이다.
+4. 의존성 확인: 특정 클라우드 벤더에 게임의 연결 계층 전체를 묶는 것은 아무래도 좀 부담된다.
+
+*다만 이렇게 되면 결국, 나중에 로비 기반 게임으로 업그레이드 해야할 때 다시금 코드를 뜯어 고쳐야하고, 그리고 무엇보다 편의성 측면에서 트레이드 오프가 생겨버렸습니다.* Photon이 주는 검증된 안정성과 편의(매니지드 인프라, 호스트 마이그레이션 등)를 포기하고, 트랜스포트 결선과 연결 수명주기를 직접 책임져야했고, 호스트 권위 P2P의 약점 (호스트가 나가면 세션 종료, 전용 서버 대비 보안·확장성 한계 → 지금도 게임 중간에 나가면 그냥 끝나버립니다.)를 인지하고, 이를 감수하고있습니다.
+
+전용 서버 자체로 만들어서 로비 구조는 쉽게 확장할 수 있습니다. 애초에 스켈레톤 코드를 구성할 때 이를 염두해 두고 작성했습니다. `NetworkGameController.OnStartServer()`가 `GameState`·모든 시스템·이펙트를 생성하고, 게임 로직은 로컬 클라이언트와 완전히 분리돼 있습니다. 하지만 이를 위해서는, 전용 서버 로직을 구현한다면 `SteamManager`에서 호스트 `SteamID` 기반 접속 로직을 수정해야합니다. 거기에 추가로 `RpcInitializeGameUI` → `InitUIRoutine`처럼 "호스트에도 로컬 플레이어가 있다"를 가정한 코드들을 전부 뜯어 고쳐야합니다.
+
+**추후 로비 시스템 기반으로 게임을 확장하겠지만, 현재까지는 이러한 트레이드 오프를 감수하여 진행했습니다. 추후 확장할 로비 시스템은 개념만 다음과 같이 잡아두었습니다.**
+
+1. Steam에는 클라이언트 API와 별개로 게임 서버 전용 API([SteamGameServer](https://partner.steamgames.com/doc/api/isteamgameserver?language=english))가 있고, 이건 사람 로그인 없이 익명 로그인!!!!!
+2. 트랜스포트를 이 API 기반으로 교체/포팅하면, 헤드리스 서버에서도 Steam 네트워킹이 돌고 친구 플레이도 유지
+3. 호스팅: 어느 옵션이든 Mirror 패키지에 들어 있는 Edgegap(서버 호스팅·오케스트레이션) 연동을 출발점으로 사용 가능
+
+---
+
+#### RoadMap02 코드 리펙토링과 부드러운 카드 애니메이션
+
+코드를 전체적으로 더 리펙토링 해보고 싶습니다. 이전에는 '기획 의도가 어떻게 변할지 모르니 일단 전부 구현'을 목표로 코드를 짜면서 확장성만 생각했는데, 결국 남은건 그걸 다시 쳐내고, 또 쳐내고 줄여야하는 작업에 연속이었습니다. 이번에 리펙토링 하면서 얻은 지식을 바탕으로, 새롭게 리펙토링을 진행할 예정입니다.
+
+카드를 내고, 버리고, 뽑는 일체의 과정에 애니메이션을 추가할 계획입니다. 전체적으로 프론트엔드에 힘을 주고 '게임 답게' 만들어 보고 싶습니다.
+
+---
+
+### 출시를 통해 배운 점과 아쉬운 점
+
+스팀에 상점페이지 하나 만드는 것도 어려운 일이고, 무엇보다 게임은 혼자서 만들기에는 너무 어렵다는 것을 뼈저리게 깨달았습니다.
+
+상점 페이지 설명 부족으로 다시 작성하고, 한번 요청 보내면 일주일은 기본. '누군가는 이 게임을 플레이 한다'라는 생각은 강박증과 완벽주의적 사고를 악화시켜 계속해서 고치고 고치고 고치며 제자리만 걷게 만들었습니다.
+
+마음은 조급해지고, 타협을 할까 말까 고민해가며 반복 또 반복.
+
+그런데 아이러니하게도, 이렇게 하니깐 진짜 프로그래머가 된 것 같았습니다. 디자인 패턴을 직접 쓰면서 배우고, 유니티 엔진을 직접 다루며 프론트 엔드를 복습하고, '이건 왜 이렇게 구현해야할까' 라며, AI가 짜준 코드를 보며 밤새 고민하며 이해하는 과정 하나하나에서 즐거웠습니다.
+
+그만큼, 너무 아쉬웠습니다.
+
+내가 좀 더 공부를 잘해서 이 게임이 좀 더 일찍 나왔다면, 같이 게임을 만든 친구들이 좀 더 여유 있을 때 일찍 보고, 더 많은걸 수정할 수 있었을텐데. 아쉬움이 너무 깊게 남았습니다.
+
+---
+
+### 가장 힘들었던 구현 부
+
+effect 시스템 전반과 네트워크 전반이 너무 힘들었습니다. 특히, 네트워크 연결과 로직 생각이 너무 힘들었고, AI의 도움을 정말정말 많이 받았습니다.
+
+네트워크에 관해서는 지식이 거의 바닥이었습니다. 기껏해야 SQL 좀 다룰 줄 알고, 결정론이 뭔지 아는 정도에서 시작한 멀티플레이 게임은, 생각 이상으로 어려웠습니다.
+
+하나를 배우면 또 하나를 알아야하고, 그럼 이전걸 까먹기를 반복, 반복, 반복. AI에게 질문하고, 보고, 또 질문하고 막히고, 다시 또 질문하면 토큰 다 써서 질문 막히고. 또 어느날 질문하면 메모리 문제로 코드 뒤엎기를 몇십번씩 반복했습니다.
+
+JSON 파싱도, 의도한것과는 다르게 JSON이 쓰여지고, 사용되는 과정이, 특히 '그냥' 실행 될 때 가장 무서웠습니다.
+
+솔직하게 말해서, 여기 구현된 네트워크에 60%정도만 이해했다고 해도 과언은 아닙니다. 아마 AI가 없었다면 이 게임은 멀티플레이 구현부가 텅 비었을지도 모르겠습니다. 그럼에도 불구하고, 힘든만큼 보람도 있었습니다.
+
+전부는 아니더라도, 멀티플레이가 어떻게 흘러가는지 머릿속에 잡혔고, 관련 용어들도 학습하며, 프로그래머로써 한 발 더 나아간 기분이 듭니다.
+
+그리고 이 기분을 착각으로 만들지 않기 위해, 이 부분은 특히 더, 리펙토링을 열심히 해가며 학습할것입니다.
+
+---
+
+### 가장 재미있었던 구현 부
+
+effect 구현부가 가장 재미있었습니다. JSON으로 몇줄만 추가하면 이펙트가 (형식에만 맞는다면) 잘 나오는 모습 하나하나가 너무 즐거웠습니다.
+
+그리고 리펙토링이 너무 재미있었습니다.
+
+코드를 다시금 복습하면서, '이건 내가 뭔 생각으로 구현했지?'싶은것들을 정리하고, '아 이건 확장성 때문에...' 혹은 '아 이건 내가 기획 의도를 잘못 읽고...(기획 의도 라고 주석에 명시한건 대부분 여깁니다...)' 하나하나 고쳐가고, 알게모르게 있던 버그들을 잡는 과정이 너무 즐거웠습니다. 거기에 리펙토링 마치고 게임 테스트 했을 때 돌아가는걸 보면 희열이 느껴지고, 무엇보다 코드가 줄어들면 줄어들수록 진짜 대단한 프로그래머가 된 것 같은 도파민이 펑펑 터졌습니다.
+
+---
+
+### 참고자료
+
+[네트워크 기초](https://waterglass0105.tistory.com/106)
+
+[언리얼 엔진의 프레임 워크와 기초 그리고 네트워크](https://waterglass0105.tistory.com/91)
+
+[유니티에서 Photon 사용하기](https://waterglass0105.tistory.com/135)
+
+[언리얼 엔진과 네트워크](https://waterglass0105.tistory.com/105)
+
+[RPC](https://co-no.tistory.com/entry/%ED%86%B5%EC%8B%A0-RPCRemote-Procedure-Call%EC%9D%98-%EA%B0%9C%EB%85%90-%EB%B0%8F-%ED%8A%B9%EC%A7%95)
