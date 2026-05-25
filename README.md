@@ -4,7 +4,7 @@
 
 <img width="7680" height="4320" alt="Main" src="https://github.com/user-attachments/assets/21e34a03-98b6-4ef0-b5c1-35966d6a78d1" />
 
-## TL;DR
+## 프로젝트 요약
 
 **Cultist**는 Unity·Mirror·Steam P2P 기반의 3인 멀티플레이 전략 카드 게임입니다. 호스트 권위 모델 위에서, **기획자가 JSON만 추가하면 코드 수정 없이 새 카드 효과가 붙는** Command + Registry 구조로 카드 효과 시스템을 설계했습니다.
 
@@ -16,7 +16,7 @@
 | **핵심 패턴** | Command + Registry · Repository · Façade · State Machine |
 | **플랫폼** | Steam (출시 완료) — [상점](https://store.steampowered.com/app/4696600) · [트레일러](https://www.youtube.com/watch?v=ZR8SCa53bXo) |
 
-**시간이 부족하다면 이 세 챕터만 보셔도 프로젝트의 핵심이 드러납니다.**
+**시간이 부족하다면 이 세 챕터만 보셔도 됩니다!(눈물)**
 
 - [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템) — JSON DSL과 Command + Registry로 OCP를 자연스럽게 실현한 부분 *(이 프로젝트의 하이라이트)*
 - [Chapter 6. 비동기 플레이어 입력 처리](#chapter-6-비동기-플레이어-입력-처리) — `TaskCompletionSource`로 RPC 왕복을 `await` 한 줄 뒤에 감춘 설계
@@ -32,7 +32,7 @@
 
 ## 목차
 
-- [TL;DR](#tldr)
+- [프로젝트 요약](#프로젝트-요약)
 - [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
   - [게임 소개 및 장르](#게임-소개-및-장르)
   - [개발 환경 및 기술 스택 그리고 개발 관점](#개발-환경-및-기술-스택-그리고-개발-관점)
