@@ -4,109 +4,124 @@
 
 <img width="7680" height="4320" alt="Main" src="https://github.com/user-attachments/assets/21e34a03-98b6-4ef0-b5c1-35966d6a78d1" />
 
+## TL;DR
+
+**Cultist**는 Unity·Mirror·Steam P2P 기반의 3인 멀티플레이 전략 카드 게임입니다. 호스트 권위 모델 위에서, **기획자가 JSON만 추가하면 코드 수정 없이 새 카드 효과가 붙는** Command + Registry 구조로 카드 효과 시스템을 설계했습니다.
+
+| 분류 | 내용 |
+| :--- | :--- |
+| **엔진 / 언어** | Unity 6000.3.8f1 (URP) / C# |
+| **네트워크** | Mirror + FizzyFacepunch (Steam P2P) · kcp2k (로컬 테스트) |
+| **아키텍처** | 호스트 권위 + 레이어드 (Domain → Data → Systems → Effects → Network) |
+| **핵심 패턴** | Command + Registry · Repository · Façade · State Machine |
+| **플랫폼** | Steam (출시 완료) — [상점](https://store.steampowered.com/app/4696600) · [트레일러](https://www.youtube.com/watch?v=ZR8SCa53bXo) |
+
+**시간이 부족하다면 이 세 챕터만 보셔도 프로젝트의 핵심이 드러납니다.**
+
+- [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템) — JSON DSL과 Command + Registry로 OCP를 자연스럽게 실현한 부분 *(이 프로젝트의 하이라이트)*
+- [Chapter 6. 비동기 플레이어 입력 처리](#chapter-6-비동기-플레이어-입력-처리) — `TaskCompletionSource`로 RPC 왕복을 `await` 한 줄 뒤에 감춘 설계
+- [Chapter 7. 서버 권위 상태 동기화](#chapter-7-서버-권위-상태-동기화) — `SyncList` 기반 호스트 → 클라이언트 화면 갱신
+
+리팩토링 회고가 궁금하다면 [`FieldState` 캡슐화 재설계](#fieldstatecs)와 [`DeckSystem` 클래스 삭제](#deckrepositorycs) 절을 추천드립니다.
+
+<br>
+
+---
+
+<br>
+
 ## 목차
 
-- [Cultist - 3인 멀티플레이 카드 게임](#cultist---3인-멀티플레이-카드-게임)
-  - [목차](#목차)
-  - [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
-    - [게임 소개 및 장르](#게임-소개-및-장르)
-    - [개발 환경 및 기술 스택 그리고 개발 관점](#개발-환경-및-기술-스택-그리고-개발-관점)
-  - [Ⅱ. 시스템 아키텍처 (Architecture)](#ⅱ-시스템-아키텍처-architecture)
-    - [Mirror](#mirror)
-    - [Facepunch](#facepunch)
-    - [데이터 흐름 및 통신 방식](#데이터-흐름-및-통신-방식)
-  - [Ⅲ. 핵심 기능 및 구현 로직 (Core Features)](#ⅲ-핵심-기능-및-구현-로직-core-features)
-    - [용어 설명](#용어-설명)
-    - [Chapter 1. 게임 상태 모델](#chapter-1-게임-상태-모델)
-      - [`Card.cs`](#cardcs)
-      - [`CardInstance.cs`](#cardinstancecs)
-      - [`IdGenerator.cs`](#idgeneratorcs)
-      - [`GameState.cs`](#gamestatecs)
-      - [`PlayerState.cs`](#playerstatecs)
-      - [`DeckCollection.cs`](#deckcollectioncs)
-      - [`DeckState.cs`](#deckstatecs)
-      - [`FieldTree.cs`](#fieldtreecs)
-      - [`FieldNode.cs`](#fieldnodecs)
-      - [`FieldState.cs`](#fieldstatecs)
-      - [`Phase.cs`](#phasecs)
-      - [`PhaseState.cs`](#phasestatecs)
-      - [`TurnState.cs`](#turnstatecs)
-      - [`GameActionRecord.cs`](#gameactionrecordcs)
-      - [`DrawRule.cs`](#drawrulecs)
-      - [`RevealReason.cs`](#revealreasoncs)
-      - [`DeterministicTreeLayout.cs`](#deterministictreelayoutcs)
-      - [`UICurvedLine.cs`](#uicurvedlinecs)
-    - [Chapter 2. 시스템](#chapter-2-시스템)
-      - [`CardMovementSystem.cs`](#cardmovementsystemcs)
-      - [`GameActionSystem.cs`](#gameactionsystemcs)
-      - [`FieldSystem.cs`](#fieldsystemcs)
-      - [`DeckRepository.cs`](#deckrepositorycs)
-      - [과거의 잔재: `DeckSystem`의 회고](#과거의-잔재-decksystem의-회고)
-    - [Chapter 3. 턴·페이즈 상태 머신](#chapter-3-턴페이즈-상태-머신)
-      - [`TurnSystem.cs`](#turnsystemcs)
-      - [`PhaseSystem.cs`](#phasesystemcs)
-    - [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템)
-      - [JSON 데이터 구조](#json-데이터-구조)
-        - [3단 구조: `cardId → trigger → commands`](#3단-구조-cardid--trigger--commands)
-        - [트리거: *언제* 발화되는가](#트리거-언제-발화되는가)
-        - [명령: `Command`](#명령-command)
-        - [파라미터: `amount`](#파라미터-amount)
-        - [변수와 정수 식: `SetVar` / `IntExpr`](#변수와-정수-식-setvar--intexpr)
-        - [조건과 분기: `If`](#조건과-분기-if)
-        - [OCP 성립, 추가 확장](#ocp-성립-추가-확장)
-      - [`EffectRegistry.cs`](#effectregistrycs)
-      - [`TriggerContext.cs`](#triggercontextcs)
-      - [`CommandRegistry.cs`](#commandregistrycs)
-      - [`ConditionRegistry.cs`](#conditionregistrycs)
-      - [`ValueResolver.cs`](#valueresolvercs)
-      - [`TargetResolver.cs`](#targetresolvercs)
-      - [진입점 1: `Resolve` (후보 풀 생성)](#진입점-1-resolve-후보-풀-생성)
-      - [진입점 2: `PickAsync` (실제로 카드를 골라내기)](#진입점-2-pickasync-실제로-카드를-골라내기)
-      - [진입점 3: `ManualPickOneOrDoneAsync`](#진입점-3-manualpickoneordoneasync)
-      - [`EffectRunner.cs`](#effectrunnercs)
+- [TL;DR](#tldr)
+- [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
+  - [게임 소개 및 장르](#게임-소개-및-장르)
+  - [개발 환경 및 기술 스택 그리고 개발 관점](#개발-환경-및-기술-스택-그리고-개발-관점)
+- [Ⅱ. 시스템 아키텍처 (Architecture)](#ⅱ-시스템-아키텍처-architecture)
+  - [Mirror](#mirror)
+  - [Facepunch](#facepunch)
+  - [데이터 흐름 및 통신 방식](#데이터-흐름-및-통신-방식)
+- [Ⅲ. 핵심 기능 및 구현 로직 (Core Features)](#ⅲ-핵심-기능-및-구현-로직-core-features)
+  - [용어 설명](#용어-설명)
+  - [Chapter 1. 게임 상태 모델](#chapter-1-게임-상태-모델)
+    - [`Card.cs`](#cardcs)
+    - [`CardInstance.cs`](#cardinstancecs)
+    - [`IdGenerator.cs`](#idgeneratorcs)
+    - [`GameState.cs`](#gamestatecs)
+    - [`PlayerState.cs`](#playerstatecs)
+    - [`DeckCollection.cs`](#deckcollectioncs)
+    - [`DeckState.cs`](#deckstatecs)
+    - [`FieldTree.cs`](#fieldtreecs)
+    - [`FieldNode.cs`](#fieldnodecs)
+    - [`FieldState.cs`](#fieldstatecs)
+    - [`Phase.cs`](#phasecs)
+    - [`PhaseState.cs`](#phasestatecs)
+    - [`TurnState.cs`](#turnstatecs)
+    - [`GameActionRecord.cs`](#gameactionrecordcs)
+    - [`DrawRule.cs`](#drawrulecs)
+    - [`RevealReason.cs`](#revealreasoncs)
+    - [`DeterministicTreeLayout.cs`](#deterministictreelayoutcs)
+    - [`UICurvedLine.cs`](#uicurvedlinecs)
+  - [Chapter 2. 시스템](#chapter-2-시스템)
+    - [`CardMovementSystem.cs`](#cardmovementsystemcs)
+    - [`GameActionSystem.cs`](#gameactionsystemcs)
+    - [`FieldSystem.cs`](#fieldsystemcs)
+    - [`DeckRepository.cs`](#deckrepositorycs)
+    - [과거의 잔재: `DeckSystem`의 회고](#과거의-잔재-decksystem의-회고)
+  - [Chapter 3. 턴·페이즈 상태 머신](#chapter-3-턴페이즈-상태-머신)
+    - [`TurnSystem.cs`](#turnsystemcs)
+    - [`PhaseSystem.cs`](#phasesystemcs)
+  - [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템)
+    - [JSON 데이터 구조](#json-데이터-구조)
+    - [`EffectRegistry.cs`](#effectregistrycs)
+    - [`TriggerContext.cs`](#triggercontextcs)
+    - [`CommandRegistry.cs`](#commandregistrycs)
+    - [`ConditionRegistry.cs`](#conditionregistrycs)
+    - [`ValueResolver.cs`](#valueresolvercs)
+    - [`TargetResolver.cs`](#targetresolvercs)
+    - [`EffectRunner.cs`](#effectrunnercs)
     - [A. 인터페이스·인프라](#a-인터페이스인프라)
       - [`IEffectGameState.cs`](#ieffectgamestatecs)
       - [`IRandomSource.cs`](#irandomsourcecs)
       - [`ICommand.cs`](#icommandcs)
       - [`ICondition.cs`](#iconditioncs)
-      - [B. 명령들 — 단순부터 복잡](#b-명령들--단순부터-복잡)
-        - [`DrawCommand.cs`](#drawcommandcs)
-        - [`RevealCommand.cs`](#revealcommandcs)
-        - [`TargetedRemovalCommand.cs`](#targetedremovalcommandcs)
-        - [`TradeCommand.cs`](#tradecommandcs)
-        - [`StarveCommand.cs`](#starvecommandcs)
-        - [`GetCommand.cs`](#getcommandcs)
-        - [`SetNextDrawCommand.cs`](#setnextdrawcommandcs)
-        - [`AddTurnCycleCommand.cs`](#addturncyclecommandcs)
-      - [C. 흐름 제어 — 다른 명령을 조작하는 메타 명령](#c-흐름-제어--다른-명령을-조작하는-메타-명령)
-        - [`LogCommand.cs`](#logcommandcs)
-        - [`SetVarCommand.cs`](#setvarcommandcs)
-        - [`IfCommand.cs`](#ifcommandcs)
-      - [D. 조건들](#d-조건들)
-        - [`CompareCondition.cs`](#compareconditioncs)
-      - [E. 조립·메타](#e-조립메타)
-        - [`EffectsBootstrap.cs`](#effectsbootstrapcs)
-      - [Chapter 5. 승패 판정 시스템](#chapter-5-승패-판정-시스템)
-        - [`StatSystem.cs`](#statsystemcs)
-        - [`GameRuleSystem.cs`](#gamerulesystemcs)
-      - [RPC 작동 원리와 메커니즘 B 복습](#rpc-작동-원리와-메커니즘-b-복습)
-      - [Chapter 6. 비동기 플레이어 입력 처리](#chapter-6-비동기-플레이어-입력-처리)
-        - [`RemotePlayerInputProvider.cs`](#remoteplayerinputprovidercs)
-        - [`IPlayerInputProvider.cs`](#iplayerinputprovidercs)
-      - [Chapter 7. 서버 권위 상태 동기화](#chapter-7-서버-권위-상태-동기화)
-        - [`NetworkDTOs.cs`](#networkdtoscs)
-        - [`GameNetworkManager.cs`](#gamenetworkmanagercs)
-        - [`GamePlayer.cs`](#gameplayercs)
-        - [`NetworkGameController.cs`](#networkgamecontrollercs)
-        - [`ClientCardManager.cs`](#clientcardmanagercs)
-  - [Ⅳ. 회고 및 마무리 (Conclusion)](#ⅳ-회고-및-마무리-conclusion)
-    - [로드맵](#로드맵)
-      - [RoadMap01 멀티플레이 로비](#roadmap01-멀티플레이-로비)
-      - [RoadMap02 코드 리펙토링과 부드러운 카드 애니메이션](#roadmap02-코드-리펙토링과-부드러운-카드-애니메이션)
-    - [출시를 통해 배운 점과 아쉬운 점](#출시를-통해-배운-점과-아쉬운-점)
-    - [가장 힘들었던 구현 부](#가장-힘들었던-구현-부)
-    - [가장 재미있었던 구현 부](#가장-재미있었던-구현-부)
-    - [참고자료](#참고자료)
+    - [B. 명령들 — 단순부터 복잡](#b-명령들--단순부터-복잡)
+      - [`DrawCommand.cs`](#drawcommandcs)
+      - [`RevealCommand.cs`](#revealcommandcs)
+      - [`TargetedRemovalCommand.cs`](#targetedremovalcommandcs)
+      - [`TradeCommand.cs`](#tradecommandcs)
+      - [`StarveCommand.cs`](#starvecommandcs)
+      - [`GetCommand.cs`](#getcommandcs)
+      - [`SetNextDrawCommand.cs`](#setnextdrawcommandcs)
+      - [`AddTurnCycleCommand.cs`](#addturncyclecommandcs)
+    - [C. 흐름 제어 — 다른 명령을 조작하는 메타 명령](#c-흐름-제어--다른-명령을-조작하는-메타-명령)
+      - [`LogCommand.cs`](#logcommandcs)
+      - [`SetVarCommand.cs`](#setvarcommandcs)
+      - [`IfCommand.cs`](#ifcommandcs)
+    - [D. 조건들](#d-조건들)
+      - [`CompareCondition.cs`](#compareconditioncs)
+    - [E. 조립·메타](#e-조립메타)
+      - [`EffectsBootstrap.cs`](#effectsbootstrapcs)
+  - [Chapter 5. 승패 판정 시스템](#chapter-5-승패-판정-시스템)
+    - [`StatSystem.cs`](#statsystemcs)
+    - [`GameRuleSystem.cs`](#gamerulesystemcs)
+  - [RPC 작동 원리와 메커니즘 B 복습](#rpc-작동-원리와-메커니즘-b-복습)
+  - [Chapter 6. 비동기 플레이어 입력 처리](#chapter-6-비동기-플레이어-입력-처리)
+    - [`RemotePlayerInputProvider.cs`](#remoteplayerinputprovidercs)
+    - [`IPlayerInputProvider.cs`](#iplayerinputprovidercs)
+  - [Chapter 7. 서버 권위 상태 동기화](#chapter-7-서버-권위-상태-동기화)
+    - [`NetworkDTOs.cs`](#networkdtoscs)
+    - [`GameNetworkManager.cs`](#gamenetworkmanagercs)
+    - [`GamePlayer.cs`](#gameplayercs)
+    - [`NetworkGameController.cs`](#networkgamecontrollercs)
+    - [`ClientCardManager.cs`](#clientcardmanagercs)
+- [Ⅳ. 회고 및 마무리 (Conclusion)](#ⅳ-회고-및-마무리-conclusion)
+  - [로드맵](#로드맵)
+    - [RoadMap01 멀티플레이 로비](#roadmap01-멀티플레이-로비)
+    - [RoadMap02 코드 리팩토링과 부드러운 카드 애니메이션](#roadmap02-코드-리팩토링과-부드러운-카드-애니메이션)
+  - [출시를 통해 배운 점과 아쉬운 점](#출시를-통해-배운-점과-아쉬운-점)
+  - [가장 힘들었던 구현 부](#가장-힘들었던-구현-부)
+  - [가장 재미있었던 구현 부](#가장-재미있었던-구현-부)
+  - [참고자료](#참고자료)
 
 ## Ⅰ. 프로젝트 개요 (Overview)
 
@@ -1972,7 +1987,7 @@ public List<CardInstance> ResolveDeckCardsByFilter(Player player, JObject filter
 
 ---
 
-### A. 인터페이스·인프라
+#### A. 인터페이스·인프라
 
 #### [`IEffectGameState.cs`](./Scripts/Effects/Core/IEffectGameState.cs)
 > 효과 시스템이 게임 상태와 연결된 유일한 창구
@@ -2412,7 +2427,7 @@ JSON: { "type": "Compare", "lhs": IntExpr, "op": ">"|">="|"<"|"<="|"==", "rhs": 
 
 <br>
 
-#### Chapter 5. 승패 판정 시스템
+### Chapter 5. 승패 판정 시스템
 > 필드 상태 기반 스탯 재계산 그리고 승리 조건
 
 ##### [`StatSystem.cs`](./Scripts/Systems/StatSystem.cs)
@@ -2669,7 +2684,7 @@ flowchart TD
 
 그럼 이제, 이러한 이해를 바탕으로 네트워크 관련 코드를 박★살 내보도록 하겠습니다.
 
-#### Chapter 6. 비동기 플레이어 입력 처리
+### Chapter 6. 비동기 플레이어 입력 처리
 > `TaskCompletionSource` RPC 기반 `await` 처리
 
 우선, Chapter 6의 전체적인 흐름을 다이어그램으로 깔끔하게 보고 시작하겠습니다.
@@ -2826,7 +2841,7 @@ public void ReceiveKeepCardResponse(int selectedInstanceId) =>
 
 <br>
 
-#### Chapter 7. 서버 권위 상태 동기화
+### Chapter 7. 서버 권위 상태 동기화
 > 서버 `GameState`, 클라이언트 복제
 
 여기서도 Chapter 7의 전체적인 흐름을 다이어그램으로 깔끔하게 보고 시작하겠습니다.
@@ -3084,9 +3099,9 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 
 ---
 
-#### RoadMap02 코드 리펙토링과 부드러운 카드 애니메이션
+#### RoadMap02 코드 리팩토링과 부드러운 카드 애니메이션
 
-코드를 전체적으로 더 리펙토링 해보고 싶습니다. 이전에는 '기획 의도가 어떻게 변할지 모르니 일단 전부 구현'을 목표로 코드를 짜면서 확장성만 생각했는데, 결국 남은건 그걸 다시 쳐내고, 또 쳐내고 줄여야하는 작업에 연속이었습니다. 이번에 리펙토링 하면서 얻은 지식을 바탕으로, 새롭게 리펙토링을 진행할 예정입니다.
+코드를 전체적으로 더 리팩토링 해보고 싶습니다. 이전에는 '기획 의도가 어떻게 변할지 모르니 일단 전부 구현'을 목표로 코드를 짜면서 확장성만 생각했는데, 결국 남은건 그걸 다시 쳐내고, 또 쳐내고 줄여야하는 작업의 연속이었습니다. 이번에 리팩토링 하면서 얻은 지식을 바탕으로, 새롭게 리팩토링을 진행할 예정입니다.
 
 카드를 내고, 버리고, 뽑는 일체의 과정에 애니메이션을 추가할 계획입니다. 전체적으로 프론트엔드에 힘을 주고 '게임 답게' 만들어 보고 싶습니다.
 
@@ -3094,35 +3109,29 @@ Photon까지 공부해보고 왜 Mirror + Steam을 사용했을까 라고 물어
 
 ### 출시를 통해 배운 점과 아쉬운 점
 
-스팀에 상점페이지 하나 만드는 것도 어려운 일이고, 무엇보다 게임은 혼자서 만들기에는 너무 어렵다는 것을 뼈저리게 깨달았습니다.
+스팀 상점페이지 하나 만드는 것도 만만치 않았고, 무엇보다 게임을 한 사람의 손으로 끝까지 끌고 간다는 것이 얼마나 큰 일인지 뼈저리게 깨달았습니다.
 
-상점 페이지 설명 부족으로 다시 작성하고, 한번 요청 보내면 일주일은 기본. '누군가는 이 게임을 플레이 한다'라는 생각은 강박증과 완벽주의적 사고를 악화시켜 계속해서 고치고 고치고 고치며 제자리만 걷게 만들었습니다.
+상점 페이지 설명 부족으로 반려되어 다시 작성하면 일주일이 기본이었고, '누군가는 이 게임을 플레이한다'라는 생각이 완벽주의를 자극해 같은 부분을 고치고 또 고치며 제자리를 걷는 시기도 있었습니다.
 
-마음은 조급해지고, 타협을 할까 말까 고민해가며 반복 또 반복.
+마음은 조급해지고, 어디까지 타협할지를 두고 같은 고민을 반복하기도 했습니다.
 
-그런데 아이러니하게도, 이렇게 하니깐 진짜 프로그래머가 된 것 같았습니다. 디자인 패턴을 직접 쓰면서 배우고, 유니티 엔진을 직접 다루며 프론트 엔드를 복습하고, '이건 왜 이렇게 구현해야할까' 라며, AI가 짜준 코드를 보며 밤새 고민하며 이해하는 과정 하나하나에서 즐거웠습니다.
+그런데 아이러니하게도, 이 과정 자체가 가장 큰 성장이었습니다. 디자인 패턴을 직접 쓰면서 배우고, 유니티 엔진을 직접 다루며 프론트엔드를 복습하고, '이건 왜 이렇게 구현해야 할까'를 AI가 짜준 코드를 보며 밤새 고민하면서 이해해 가는 과정 하나하나가 즐거웠습니다.
 
-그만큼, 너무 아쉬웠습니다.
-
-내가 좀 더 공부를 잘해서 이 게임이 좀 더 일찍 나왔다면, 같이 게임을 만든 친구들이 좀 더 여유 있을 때 일찍 보고, 더 많은걸 수정할 수 있었을텐데. 아쉬움이 너무 깊게 남았습니다.
+그만큼 아쉬움도 컸습니다. 같은 수준의 이해에 좀 더 일찍 도달했더라면, 함께 만든 친구들이 여유 있을 때 더 많은 부분을 다듬을 수 있었을 텐데 — 그 아쉬움이 가장 깊게 남았습니다.
 
 ---
 
 ### 가장 힘들었던 구현 부
 
-effect 시스템 전반과 네트워크 전반이 너무 힘들었습니다. 특히, 네트워크 연결과 로직 생각이 너무 힘들었고, AI의 도움을 정말정말 많이 받았습니다.
+effect 시스템과 네트워크 구현이 가장 어려웠습니다. 특히 네트워크는 시작 시점의 배경 지식이 SQL과 결정론 개념 정도였기에, 학습 곡선이 가팔랐습니다.
 
-네트워크에 관해서는 지식이 거의 바닥이었습니다. 기껏해야 SQL 좀 다룰 줄 알고, 결정론이 뭔지 아는 정도에서 시작한 멀티플레이 게임은, 생각 이상으로 어려웠습니다.
+개념 하나를 익히면 다음 개념이 그 위에 쌓이고, 잠시 다른 시스템을 만지다 돌아오면 흐름을 다시 따라가야 하는 일이 반복됐습니다. AI에게 질문하고, 받은 답을 직접 코드로 옮겨보고, 작동하지 않으면 다시 질문하는 사이클을 수십 번 거치면서, 어쩌면 책으로만 봤을 때보다 더 깊게 머릿속에 자리잡은 부분도 있습니다.
 
-하나를 배우면 또 하나를 알아야하고, 그럼 이전걸 까먹기를 반복, 반복, 반복. AI에게 질문하고, 보고, 또 질문하고 막히고, 다시 또 질문하면 토큰 다 써서 질문 막히고. 또 어느날 질문하면 메모리 문제로 코드 뒤엎기를 몇십번씩 반복했습니다.
+JSON 파싱은 의도와 다르게 동작할 때, 특히 *에러 없이 조용히 잘못 동작* 할 때가 가장 까다로웠습니다.
 
-JSON 파싱도, 의도한것과는 다르게 JSON이 쓰여지고, 사용되는 과정이, 특히 '그냥' 실행 될 때 가장 무서웠습니다.
+멀티플레이 구현에서는 AI의 도움을 많이 받았고, 모든 줄을 처음부터 다시 쓰라고 하면 막힐 부분이 분명히 남아 있습니다. 다만 *전체 흐름과 각 부품의 역할*은 머릿속에 잡혔고, 어디를 다시 깊이 파야 하는지도 명확히 알게 되었습니다. 멀티플레이가 어떻게 흘러가는지 머릿속에 한 장의 그림으로 잡힌 것 — 그게 이 챕터에서 얻은 가장 큰 자산입니다.
 
-솔직하게 말해서, 여기 구현된 네트워크에 60%정도만 이해했다고 해도 과언은 아닙니다. 아마 AI가 없었다면 이 게임은 멀티플레이 구현부가 텅 비었을지도 모르겠습니다. 그럼에도 불구하고, 힘든만큼 보람도 있었습니다.
-
-전부는 아니더라도, 멀티플레이가 어떻게 흘러가는지 머릿속에 잡혔고, 관련 용어들도 학습하며, 프로그래머로써 한 발 더 나아간 기분이 듭니다.
-
-그리고 이 기분을 착각으로 만들지 않기 위해, 이 부분은 특히 더, 리펙토링을 열심히 해가며 학습할것입니다.
+이 이해를 진짜 내 것으로 만들기 위해, 이 부분은 특히 더, 리팩토링을 거듭하며 학습할 계획입니다.
 
 ---
 
@@ -3130,9 +3139,9 @@ JSON 파싱도, 의도한것과는 다르게 JSON이 쓰여지고, 사용되는 
 
 effect 구현부가 가장 재미있었습니다. JSON으로 몇줄만 추가하면 이펙트가 (형식에만 맞는다면) 잘 나오는 모습 하나하나가 너무 즐거웠습니다.
 
-그리고 리펙토링이 너무 재미있었습니다.
+그리고 리팩토링이 너무 재미있었습니다.
 
-코드를 다시금 복습하면서, '이건 내가 뭔 생각으로 구현했지?'싶은것들을 정리하고, '아 이건 확장성 때문에...' 혹은 '아 이건 내가 기획 의도를 잘못 읽고...(기획 의도 라고 주석에 명시한건 대부분 여깁니다...)' 하나하나 고쳐가고, 알게모르게 있던 버그들을 잡는 과정이 너무 즐거웠습니다. 거기에 리펙토링 마치고 게임 테스트 했을 때 돌아가는걸 보면 희열이 느껴지고, 무엇보다 코드가 줄어들면 줄어들수록 진짜 대단한 프로그래머가 된 것 같은 도파민이 펑펑 터졌습니다.
+코드를 다시금 복습하면서, '이건 내가 뭔 생각으로 구현했지?'싶은것들을 정리하고, '아 이건 확장성 때문에...' 혹은 '아 이건 내가 기획 의도를 잘못 읽고...(기획 의도 라고 주석에 명시한건 대부분 여깁니다...)' 하나하나 고쳐가고, 알게모르게 있던 버그들을 잡는 과정이 너무 즐거웠습니다. 거기에 리팩토링 마치고 게임 테스트 했을 때 돌아가는걸 보면 희열이 느껴지고, 무엇보다 코드가 줄어들면 줄어들수록 진짜 대단한 프로그래머가 된 것 같은 도파민이 펑펑 터졌습니다.
 
 ---
 
