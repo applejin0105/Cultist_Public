@@ -1,4 +1,4 @@
-﻿using Mirror;
+using Mirror;
 using Scenes.Lobby;
 using UnityEngine;
 
@@ -14,6 +14,9 @@ namespace App.Network
 
         [SyncVar(hook = nameof(OnLeaderStateChanged))]
         public bool isLeader = false;
+
+        [SyncVar(hook = nameof(OnSelectedDeckChanged))]
+        public string selectedDeckName;
 
         public override void OnStartServer()
         {
@@ -69,7 +72,15 @@ namespace App.Network
             isReady = state;
         }
 
-        // [추가] 로컬 환경에서 게임 시작을 동기화하기 위한 RPC
+        [Command]
+        public void CmdSetSelectedDeck(string deckName)
+        {
+            selectedDeckName = deckName;
+        }
+
+        // 로컬 환경에서 게임 시작을 동기화하기 위한 RPC
+        // 자꾸 스팀 연동 안되면 로컬 환경에서 덱 로드 안됨 + 가끔 그냥 로컬 덱 연동 안됨 해결.
+        // 으어어어...
         [Command]
         public void CmdTriggerLocalGameStart()
         {
@@ -90,6 +101,18 @@ namespace App.Network
             if (LobbyUIManager.Instance != null && steamId != 0)
             {
                 LobbyUIManager.Instance.UpdateReadyUI(steamId, newState);
+            }
+        }
+
+        private void OnSelectedDeckChanged(string oldDeck, string newDeck)
+        {
+            if (LobbyUIManager.Instance != null && steamId != 0)
+            {
+                var slot = LobbyUIManager.Instance.GetSlotBySteamId(steamId);
+                if (slot != null)
+                {
+                    slot.UpdateRemoteDeckSelection(newDeck);
+                }
             }
         }
 
