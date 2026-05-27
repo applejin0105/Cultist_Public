@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Threading.Tasks;
 using Data.Models;
 using UnityEngine;
@@ -38,14 +38,6 @@ namespace Data.Initialization
             string directory = Path.GetDirectoryName(targetPath);
             if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
 
-            // [수정] 무의미한 if/else 제거.
-            //   EnsureJsonIntegrityAsync는 내부적으로 (target 부재 / 해시 불일치) 시에만 복사하므로
-            //   forceOverwrite·shouldCopy 분기 없이 항상 한 번 호출하면 충분하다.
-            //   (forceOverwrite는 현재 동작에 영향을 주지 않으므로 무시한다.)
-            //
-            // [수정] IOException을 '조용히 무시'하지 않는다. 무시하면 파일이 불완전하게 남아
-            //   sampleDecks.json 등이 빈/깨진 상태로 방치된다. 짧은 대기 후 재시도하고,
-            //   끝까지 실패하면 예외를 전파하여 상위(InitializeAsync 캐시)가 재시도하도록 한다.
             const int maxRetries = 3;
             for (int attempt = 1; ; attempt++)
             {
@@ -89,8 +81,6 @@ namespace Data.Initialization
 
         public static async Task InitEffectDBData()
         {
-            // 새 Effect 시스템에서는 cardsEffects.json 단일 파일만 사용한다.
-            // 옛 commands/conditions/triggers/schemas는 폐지 (코드 명시 등록 + 스키마 미사용).
             if (!Directory.Exists(PathConstants.EffectTargetFolderPath))
                 Directory.CreateDirectory(PathConstants.EffectTargetFolderPath);
 
@@ -106,32 +96,32 @@ namespace Data.Initialization
 
         private static async Task InitPlayerDeckDBDataAsync()
         {
-            var targetPath = PathConstants.PlayerDeckTargetFilePath;
+            string source = Path.Combine(Application.streamingAssetsPath, "decks", "playerDecks.json");
+            string target = PathConstants.PlayerDeckTargetFilePath;
 
-            // 플레이어 덱은 세이브 데이터이므로 에디터라고 해서 함부로 덮어쓰면 안 됩니다.
-            // 하지만 파일 구조가 깨졌을 때만 새로 생성합니다.
-            if (!File.Exists(targetPath))
+            // 플레이어 덱은 세이브 데이터이므로 에디터라고 해서 함부로 덮어쓰면 안 됨
+            // 하지만 파일 자체가 없을 때는 StreamingAssets의 기본 덱을 복사
+            if (!File.Exists(target))
             {
-                await CreateNewPlayerDeckFile(targetPath);
+                await EnsureFileAsync(source, target, false);
                 return;
             }
 
             try
             {
-                string json = await File.ReadAllTextAsync(targetPath);
+                string json = await File.ReadAllTextAsync(target);
                 var deckData = JsonConvert.DeserializeObject<PlayerDeck>(json);
 
-                // JSON 키값이 "PlayerDecks"인데 클래스 멤버가 "playerDecks"이면 null이 나올 수 있음
                 if (deckData?.playerDecks == null)
                 {
-                    Debug.LogWarning("[DataInitializer] PlayerDeck 데이터 구조 손상 또는 키값 불일치. 재설정 진행.");
-                    await CreateNewPlayerDeckFile(targetPath);
+                    Debug.LogWarning("[DataInitializer] PlayerDeck 데이터 구조 손상 또는 키값 불일치. 기본값으로 복사 시도.");
+                    await EnsureFileAsync(source, target, true); // 손상된 경우 덮어쓰기
                 }
             }
             catch (System.Exception ex)
             {
                 Debug.LogError($"[DataInitializer] PlayerDeck 로드 실패: {ex.Message}");
-                await CreateNewPlayerDeckFile(targetPath);
+                await EnsureFileAsync(source, target, true);
             }
         }
 
