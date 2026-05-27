@@ -4,17 +4,44 @@
 
 <img width="7680" height="4320" alt="Main" src="https://github.com/user-attachments/assets/21e34a03-98b6-4ef0-b5c1-35966d6a78d1" />
 
-## 프로젝트 요약
+## Ⅰ. 프로젝트 개요 (Overview)
 
-**Cultist**는 Unity·Mirror·Steam P2P 기반의 3인 멀티플레이 전략 카드 게임입니다. 호스트 권위 모델 위에서, **기획자가 JSON만 추가하면 코드 수정 없이 새 카드 효과가 붙는** Command + Registry 구조로 카드 효과 시스템을 설계했습니다.
+### 게임 소개 및 장르
 
-| 분류 | 내용 |
-| :--- | :--- |
-| **엔진 / 언어** | Unity 6000.3.8f1 (URP) / C# |
-| **네트워크** | Mirror + FizzyFacepunch (Steam P2P) · kcp2k (로컬 테스트) |
-| **아키텍처** | 호스트 권위 + 레이어드 (Domain → Data → Systems → Effects → Network) |
-| **핵심 패턴** | Command + Registry · Repository · Façade · State Machine |
-| **플랫폼** | Steam (출시 완료) — [상점](https://store.steampowered.com/app/4696600) · [트레일러](https://www.youtube.com/watch?v=ZR8SCa53bXo) |
+게임 **Cultist**는 고대 지중해와 중동의 종교적, 인류학적 역사를 배경으로 하는 3인 멀티플레이 전략 카드 게임입니다. 플레이어는 정형화된 덱 기반 전투를 넘어, 카드들이 마치 뿌리처럼 뻗어나가며 자유롭게 분기하는 트리 구조(Tree Structure) 형태의 유기적인 필드 시스템을 통해 자신만의 교리와 세력을 확장해 나갑니다. 이 치열한 수싸움 속에서 시간의 시련을 견디는 거대한 종교로 거듭날 수도, 역사의 뒤안길로 사라진 유물 속 흔적으로 남을 수도 있습니다.
+
+[![Steam](https://img.shields.io/badge/Steam-000000?style=for-the-badge&logo=steam&logoColor=white)](https://store.steampowered.com/app/4696600)
+[![YouTube](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=ZR8SCa53bXo)
+
+### 개발 환경 및 기술 스택 그리고 개발 관점
+
+**Client (Game Engine)**
+
+* **Engine:** Unity 6000.3.8f1 (URP 17.3.0 / Universal Render Pipeline)
+* **Language:** C# (.NET / Unity Scripting Runtime)
+* **Architecture/Pattern:**
+  * 레이어드 아키텍처 (Domain → Data → Systems → Effects → Network → Scene/UI, 단방향 의존)
+  * Component-Based (Unity MonoBehaviour 기반)
+  * Host-Authoritative 네트워킹 (서버 권위 모델)
+  * Command + Interpreter 패턴 (JSON DSL 카드 효과 시스템)
+  * 보조: Registry, State Machine, Event Bus(Observer), Repository
+* Key Libraries:
+  * Mirror: 고수준 네트워킹 (NetworkManager / SyncVar / Command·Rpc)
+  * FizzyFacepunch + Facepunch.Steamworks: Steam P2P 트랜스포트 & 로비/인증
+  * kcp2k: 로컬 IP 트랜스포트 (로컬 멀티플레이 제공)
+  * DOTween / DOTween Pro (Demigiant): UI·카메라 애니메이션 (Components/Effects)
+  * Newtonsoft.Json: cardDB.json / cardsEffects.json DSL 파싱
+  * Unity Input System 1.18.0 / TextMesh Pro / Unity UI (uGUI)
+
+**Tools & Collaboration**
+* **Version Control:** Git, GitHub
+* **IDE:** Rider
+
+<br>
+
+> 이 프로젝트에서 프로그래머인 저의 역할은, 기획자가 머릿속에 그린 게임을 한 픽셀도 타협 없이 코드로 옮기는 것에 있습니다.
+> 
+> 따라서, **모든 구현의 완료 기준은 '동작한다'가 아닌, '기획 의도와 일치한다'에 두었습니다.**
 
 **시간이 부족하다면 이 세 챕터만 보셔도 됩니다!(눈물)**
 
@@ -32,7 +59,6 @@
 
 ## 목차
 
-- [프로젝트 요약](#프로젝트-요약)
 - [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
   - [게임 소개 및 장르](#게임-소개-및-장르)
   - [개발 환경 및 기술 스택 그리고 개발 관점](#개발-환경-및-기술-스택-그리고-개발-관점)
@@ -122,45 +148,6 @@
   - [가장 힘들었던 구현 부](#가장-힘들었던-구현-부)
   - [가장 재미있었던 구현 부](#가장-재미있었던-구현-부)
   - [참고자료](#참고자료)
-
-## Ⅰ. 프로젝트 개요 (Overview)
-
-### 게임 소개 및 장르
-
-게임 **Cultist**는 고대 지중해와 중동의 종교적, 인류학적 역사를 배경으로 하는 3인 멀티플레이 전략 카드 게임입니다. 플레이어는 정형화된 덱 기반 전투를 넘어, 카드들이 마치 뿌리처럼 뻗어나가며 자유롭게 분기하는 트리 구조(Tree Structure) 형태의 유기적인 필드 시스템을 통해 자신만의 교리와 세력을 확장해 나갑니다. 이 치열한 수싸움 속에서 시간의 시련을 견디는 거대한 종교로 거듭날 수도, 역사의 뒤안길로 사라진 유물 속 흔적으로 남을 수도 있습니다.
-
-[![Steam](https://img.shields.io/badge/Steam-000000?style=for-the-badge&logo=steam&logoColor=white)](https://store.steampowered.com/app/4696600)
-[![YouTube](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=ZR8SCa53bXo)
-
-### 개발 환경 및 기술 스택 그리고 개발 관점
-
-**Client (Game Engine)**
-
-* **Engine:** Unity 6000.3.8f1 (URP 17.3.0 / Universal Render Pipeline)
-* **Language:** C# (.NET / Unity Scripting Runtime)
-* **Architecture/Pattern:**
-  * 레이어드 아키텍처 (Domain → Data → Systems → Effects → Network → Scene/UI, 단방향 의존)
-  * Component-Based (Unity MonoBehaviour 기반)
-  * Host-Authoritative 네트워킹 (서버 권위 모델)
-  * Command + Interpreter 패턴 (JSON DSL 카드 효과 시스템)
-  * 보조: Registry, State Machine, Event Bus(Observer), Repository
-* Key Libraries:
-  * Mirror: 고수준 네트워킹 (NetworkManager / SyncVar / Command·Rpc)
-  * FizzyFacepunch + Facepunch.Steamworks: Steam P2P 트랜스포트 & 로비/인증
-  * kcp2k: 로컬 IP 트랜스포트 (로컬 멀티플레이 제공)
-  * DOTween / DOTween Pro (Demigiant): UI·카메라 애니메이션 (Components/Effects)
-  * Newtonsoft.Json: cardDB.json / cardsEffects.json DSL 파싱
-  * Unity Input System 1.18.0 / TextMesh Pro / Unity UI (uGUI)
-
-**Tools & Collaboration**
-* **Version Control:** Git, GitHub
-* **IDE:** Rider
-
-<br>
-
-> 이 프로젝트에서 프로그래머인 저의 역할은, 기획자가 머릿속에 그린 게임을 한 픽셀도 타협 없이 코드로 옮기는 것에 있습니다.
-> 
-> 따라서, **모든 구현의 완료 기준은 '동작한다'가 아닌, '기획 의도와 일치한다'에 두었습니다.**
 
 ## Ⅱ. 시스템 아키텍처 (Architecture)
 
