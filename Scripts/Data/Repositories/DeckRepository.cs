@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -37,6 +37,7 @@ namespace Data.Repositories
         public async Task<Dictionary<string, DeckData>> LoadAllDecksAsync()
         {
             var deckMap = new Dictionary<string, DeckData>();
+            _sampleDeckNames.Clear();
 
             string samplePath = PathConstants.SampleDeckDBTargetFilePath;
 
@@ -55,6 +56,7 @@ namespace Data.Repositories
                             deck.IsSample = true;
                             deck.cardIds.RemoveAll(id => id == deck.rootCardId);
                             deckMap.TryAdd(deck.deckName, deck);
+                            _sampleDeckNames.Add(deck.deckName);
                         }
                     }
 
