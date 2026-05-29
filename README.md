@@ -91,9 +91,9 @@ flowchart TD
 | **Ch.6** ⭐ 비동기 입력 처리 | RPC 왕복을 `await` 한 줄 뒤로 감추기 | `TaskCompletionSource` · `IPlayerInputProvider` |
 | **Ch.7** ⭐ 서버 권위 동기화 | 호스트 → 클라이언트 화면 갱신 | `SyncList` · `NetworkGameController` |
 
-### 독자 유형별 추천 경로
+### 추천 경로
 
-- 개요(Ⅰ) → 아키텍처(Ⅱ) → Chapter 1~7 순서. 뒤 챕터가 앞 챕터 위에서 설명되므로 가장 매끄럽습니다.
+- **시간에 여유가 있다면!!!!! 꼭!!!!!!** 개요(Ⅰ) → 아키텍처(Ⅱ) → Chapter 1~7 순서. 뒤 챕터가 앞 챕터 위에서 설명되므로 가장 매끄럽습니다.
 - **시간이 없다면** 위에서 추천한 세 챕터([Ch.4](#chapter-4-카드-효과-시스템) · [Ch.6](#chapter-6-비동기-플레이어-입력-처리) · [Ch.7](#chapter-7-서버-권위-상태-동기화))만. 이 프로젝트의 핵심 설계가 모두 들어 있습니다.
 - **아키텍처·네트워크 중심**: [Ⅱ. 시스템 아키텍처](#ⅱ-시스템-아키텍처-architecture) → [Ch.7 서버 권위 동기화](#chapter-7-서버-권위-상태-동기화) → [Ch.6 비동기 입력 처리](#chapter-6-비동기-플레이어-입력-처리).
 - **설계 판단·리팩토링 중심**: [`FieldState` 캡슐화 재설계](#fieldstatecs) · [`DeckSystem` 삭제 회고](#과거의-잔재-decksystem의-회고) · [`PhaseState` 불변 설계](#phasestatecs) · [`TurnState` 책임 분리](#turnstatecs).
