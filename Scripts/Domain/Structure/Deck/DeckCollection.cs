@@ -73,7 +73,7 @@ namespace Domain.Structure.Deck
             {
                 n--;
                 var k = rng.Next(n + 1);
-                (_cards[k], _cards[n]) = (_cards[k], _cards[n]);
+                (_cards[k], _cards[n]) = (_cards[n], _cards[k]);
             }
         }
 
