@@ -57,97 +57,161 @@
 
 <br>
 
+## 추천 코드 열람 순서
+
+이 문서는 **개요(Ⅰ) → 아키텍처(Ⅱ) → 코드 구현(Ⅲ) → 회고(Ⅳ)** 순으로, *큰 그림에서 세부 구현으로* 좁혀 들어가도록 구성했습니다. 그중 핵심인 코드 구현부(Ⅲ)는 아래 그림처럼 **데이터 → 시스템 → 효과 → 네트워크** 방향으로 한 계층씩 쌓이며, **뒤 챕터는 앞 챕터의 개념 위에서 설명**됩니다. 따라서 처음 보신다면 챕터 번호 순서대로 읽으시는 것을 권장합니다.
+
+```mermaid
+flowchart TD
+    subgraph L1["데이터 · 상태 — Chapter 1"]
+        D["Card · CardInstance · GameState · FieldTree<br/>(게임의 모든 데이터를 어떻게 표현하고 보호하는가)"]
+    end
+    subgraph L2["시스템 · 규칙 — Chapter 2 · 3 · 5"]
+        S["CardMovement · Field · Deck · 턴/페이즈 상태머신 · 승패 판정<br/>(데이터를 바꾸는 핵심 로직)"]
+    end
+    subgraph L3["카드 효과 — Chapter 4 ⭐"]
+        E["JSON DSL · Command · Registry<br/>(효과를 코드 수정 없이 데이터로 추가)"]
+    end
+    subgraph L4["네트워크 — Chapter 6 · 7"]
+        N["비동기 입력 브릿지 · 서버 권위 동기화<br/>(서버가 결정하고 전원에 전파)"]
+    end
+
+    L1 --> L2 --> L3 --> L4
+```
+
+### 챕터 한눈에 보기
+
+| 챕터 | 무엇을 다루나 | 핵심 키워드 |
+| :-- | :-- | :-- |
+| **Ch.1** 게임 상태 모델 | 게임의 모든 데이터가 어떻게 표현·캡슐화되는가 | `Card` · `CardInstance` · `GameState` · `FieldTree` |
+| **Ch.2** 시스템 | 상태를 바꾸는 핵심 로직 (카드 이동·필드·덱) | `CardMovementSystem` · `FieldSystem` · `DeckRepository` |
+| **Ch.3** 턴·페이즈 상태 머신 | 턴과 페이즈가 어떻게 전환되는가 | `TurnSystem` · `PhaseSystem` |
+| **Ch.4** ⭐ 카드 효과 시스템 | JSON DSL + Command로 효과를 데이터처럼 추가 (OCP) | `EffectRunner` · `CommandRegistry` · `EffectsBootstrap` |
+| **Ch.5** 승패 판정 시스템 | 매 상태 변화마다 승리 조건을 검사 | `GameRuleSystem` · `StatSystem` |
+| **Ch.6** ⭐ 비동기 입력 처리 | RPC 왕복을 `await` 한 줄 뒤로 감추기 | `TaskCompletionSource` · `IPlayerInputProvider` |
+| **Ch.7** ⭐ 서버 권위 동기화 | 호스트 → 클라이언트 화면 갱신 | `SyncList` · `NetworkGameController` |
+
+### 독자 유형별 추천 경로
+
+- 개요(Ⅰ) → 아키텍처(Ⅱ) → Chapter 1~7 순서. 뒤 챕터가 앞 챕터 위에서 설명되므로 가장 매끄럽습니다.
+- **시간이 없다면** 위에서 추천한 세 챕터([Ch.4](#chapter-4-카드-효과-시스템) · [Ch.6](#chapter-6-비동기-플레이어-입력-처리) · [Ch.7](#chapter-7-서버-권위-상태-동기화))만. 이 프로젝트의 핵심 설계가 모두 들어 있습니다.
+- **아키텍처·네트워크 중심**: [Ⅱ. 시스템 아키텍처](#ⅱ-시스템-아키텍처-architecture) → [Ch.7 서버 권위 동기화](#chapter-7-서버-권위-상태-동기화) → [Ch.6 비동기 입력 처리](#chapter-6-비동기-플레이어-입력-처리).
+- **설계 판단·리팩토링 중심**: [`FieldState` 캡슐화 재설계](#fieldstatecs) · [`DeckSystem` 삭제 회고](#과거의-잔재-decksystem의-회고) · [`PhaseState` 불변 설계](#phasestatecs) · [`TurnState` 책임 분리](#turnstatecs).
+
+> 본문의 코드 파일명(예: `GameState.cs`)은 모두 실제 소스 경로로 연결되는 링크입니다. 설명을 읽다가 원본이 궁금하면 바로 눌러 확인하실 수 있습니다.
+
+<br>
+
+---
+
+<br>
+
 ## 목차
 
-- [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
-  - [게임 소개 및 장르](#게임-소개-및-장르)
-  - [개발 환경 및 기술 스택 그리고 개발 관점](#개발-환경-및-기술-스택-그리고-개발-관점)
-- [Ⅱ. 시스템 아키텍처 (Architecture)](#ⅱ-시스템-아키텍처-architecture)
-  - [Mirror](#mirror)
-  - [Facepunch](#facepunch)
-  - [데이터 흐름 및 통신 방식](#데이터-흐름-및-통신-방식)
-- [Ⅲ. 핵심 기능 및 구현 로직 (Core Features)](#ⅲ-핵심-기능-및-구현-로직-core-features)
-  - [용어 설명](#용어-설명)
-  - [Chapter 1. 게임 상태 모델](#chapter-1-게임-상태-모델)
-    - [`Card.cs`](#cardcs)
-    - [`CardInstance.cs`](#cardinstancecs)
-    - [`IdGenerator.cs`](#idgeneratorcs)
-    - [`GameState.cs`](#gamestatecs)
-    - [`PlayerState.cs`](#playerstatecs)
-    - [`DeckCollection.cs`](#deckcollectioncs)
-    - [`DeckState.cs`](#deckstatecs)
-    - [`FieldTree.cs`](#fieldtreecs)
-    - [`FieldNode.cs`](#fieldnodecs)
-    - [`FieldState.cs`](#fieldstatecs)
-    - [`Phase.cs`](#phasecs)
-    - [`PhaseState.cs`](#phasestatecs)
-    - [`TurnState.cs`](#turnstatecs)
-    - [`GameActionRecord.cs`](#gameactionrecordcs)
-    - [`DrawRule.cs`](#drawrulecs)
-    - [`RevealReason.cs`](#revealreasoncs)
-    - [`DeterministicTreeLayout.cs`](#deterministictreelayoutcs)
-    - [`UICurvedLine.cs`](#uicurvedlinecs)
-  - [Chapter 2. 시스템](#chapter-2-시스템)
-    - [`CardMovementSystem.cs`](#cardmovementsystemcs)
-    - [`GameActionSystem.cs`](#gameactionsystemcs)
-    - [`FieldSystem.cs`](#fieldsystemcs)
-    - [`DeckRepository.cs`](#deckrepositorycs)
-    - [과거의 잔재: `DeckSystem`의 회고](#과거의-잔재-decksystem의-회고)
-  - [Chapter 3. 턴·페이즈 상태 머신](#chapter-3-턴페이즈-상태-머신)
-    - [`TurnSystem.cs`](#turnsystemcs)
-    - [`PhaseSystem.cs`](#phasesystemcs)
-  - [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템)
-    - [JSON 데이터 구조](#json-데이터-구조)
-    - [`EffectRegistry.cs`](#effectregistrycs)
-    - [`TriggerContext.cs`](#triggercontextcs)
-    - [`CommandRegistry.cs`](#commandregistrycs)
-    - [`ConditionRegistry.cs`](#conditionregistrycs)
-    - [`ValueResolver.cs`](#valueresolvercs)
-    - [`TargetResolver.cs`](#targetresolvercs)
-    - [`EffectRunner.cs`](#effectrunnercs)
-    - [A. 인터페이스·인프라](#a-인터페이스인프라)
+- [Cultist - 3인 멀티플레이 카드 게임](#cultist---3인-멀티플레이-카드-게임)
+  - [Ⅰ. 프로젝트 개요 (Overview)](#ⅰ-프로젝트-개요-overview)
+    - [게임 소개 및 장르](#게임-소개-및-장르)
+    - [개발 환경 및 기술 스택 그리고 개발 관점](#개발-환경-및-기술-스택-그리고-개발-관점)
+  - [추천 코드 열람 순서](#추천-코드-열람-순서)
+    - [챕터 한눈에 보기](#챕터-한눈에-보기)
+    - [독자 유형별 추천 경로](#독자-유형별-추천-경로)
+  - [목차](#목차)
+  - [Ⅱ. 시스템 아키텍처 (Architecture)](#ⅱ-시스템-아키텍처-architecture)
+    - [Mirror](#mirror)
+    - [Facepunch](#facepunch)
+    - [데이터 흐름 및 통신 방식](#데이터-흐름-및-통신-방식)
+  - [Ⅲ. 핵심 기능 및 구현 로직 (Core Features)](#ⅲ-핵심-기능-및-구현-로직-core-features)
+    - [용어 설명](#용어-설명)
+    - [Chapter 1. 게임 상태 모델](#chapter-1-게임-상태-모델)
+      - [`Card.cs`](#cardcs)
+      - [`CardInstance.cs`](#cardinstancecs)
+      - [`IdGenerator.cs`](#idgeneratorcs)
+      - [`GameState.cs`](#gamestatecs)
+      - [`PlayerState.cs`](#playerstatecs)
+      - [`DeckCollection.cs`](#deckcollectioncs)
+      - [`DeckState.cs`](#deckstatecs)
+      - [`FieldTree.cs`](#fieldtreecs)
+      - [`FieldNode.cs`](#fieldnodecs)
+      - [`FieldState.cs`](#fieldstatecs)
+      - [`Phase.cs`](#phasecs)
+      - [`PhaseState.cs`](#phasestatecs)
+      - [`TurnState.cs`](#turnstatecs)
+      - [`GameActionRecord.cs`](#gameactionrecordcs)
+      - [`DrawRule.cs`](#drawrulecs)
+      - [`RevealReason.cs`](#revealreasoncs)
+      - [`DeterministicTreeLayout.cs`](#deterministictreelayoutcs)
+      - [`UICurvedLine.cs`](#uicurvedlinecs)
+    - [Chapter 2. 시스템](#chapter-2-시스템)
+      - [`CardMovementSystem.cs`](#cardmovementsystemcs)
+      - [`GameActionSystem.cs`](#gameactionsystemcs)
+      - [`FieldSystem.cs`](#fieldsystemcs)
+      - [`DeckRepository.cs`](#deckrepositorycs)
+      - [과거의 잔재: `DeckSystem`의 회고](#과거의-잔재-decksystem의-회고)
+    - [Chapter 3. 턴·페이즈 상태 머신](#chapter-3-턴페이즈-상태-머신)
+      - [`TurnSystem.cs`](#turnsystemcs)
+      - [`PhaseSystem.cs`](#phasesystemcs)
+    - [Chapter 4. 카드 효과 시스템](#chapter-4-카드-효과-시스템)
+      - [JSON 데이터 구조](#json-데이터-구조)
+        - [3단 구조: `cardId → trigger → commands`](#3단-구조-cardid--trigger--commands)
+        - [트리거: *언제* 발화되는가](#트리거-언제-발화되는가)
+        - [명령: `Command`](#명령-command)
+        - [파라미터: `amount`](#파라미터-amount)
+        - [변수와 정수 식: `SetVar` / `IntExpr`](#변수와-정수-식-setvar--intexpr)
+        - [조건과 분기: `If`](#조건과-분기-if)
+        - [OCP 성립, 추가 확장](#ocp-성립-추가-확장)
+      - [`EffectRegistry.cs`](#effectregistrycs)
+      - [`TriggerContext.cs`](#triggercontextcs)
+      - [`CommandRegistry.cs`](#commandregistrycs)
+      - [`ConditionRegistry.cs`](#conditionregistrycs)
+      - [`ValueResolver.cs`](#valueresolvercs)
+      - [`TargetResolver.cs`](#targetresolvercs)
+      - [진입점 1: `Resolve` (후보 풀 생성)](#진입점-1-resolve-후보-풀-생성)
+      - [진입점 2: `PickAsync` (실제로 카드를 골라내기)](#진입점-2-pickasync-실제로-카드를-골라내기)
+      - [진입점 3: `ManualPickOneOrDoneAsync`](#진입점-3-manualpickoneordoneasync)
+      - [`EffectRunner.cs`](#effectrunnercs)
+      - [A. 인터페이스·인프라](#a-인터페이스인프라)
       - [`IEffectGameState.cs`](#ieffectgamestatecs)
       - [`IRandomSource.cs`](#irandomsourcecs)
       - [`ICommand.cs`](#icommandcs)
       - [`ICondition.cs`](#iconditioncs)
-    - [B. 명령들 — 단순부터 복잡](#b-명령들--단순부터-복잡)
-      - [`DrawCommand.cs`](#drawcommandcs)
-      - [`RevealCommand.cs`](#revealcommandcs)
-      - [`TargetedRemovalCommand.cs`](#targetedremovalcommandcs)
-      - [`TradeCommand.cs`](#tradecommandcs)
-      - [`StarveCommand.cs`](#starvecommandcs)
-      - [`GetCommand.cs`](#getcommandcs)
-      - [`SetNextDrawCommand.cs`](#setnextdrawcommandcs)
-      - [`AddTurnCycleCommand.cs`](#addturncyclecommandcs)
-    - [C. 흐름 제어 — 다른 명령을 조작하는 메타 명령](#c-흐름-제어--다른-명령을-조작하는-메타-명령)
-      - [`LogCommand.cs`](#logcommandcs)
-      - [`SetVarCommand.cs`](#setvarcommandcs)
-      - [`IfCommand.cs`](#ifcommandcs)
-    - [D. 조건들](#d-조건들)
-      - [`CompareCondition.cs`](#compareconditioncs)
-    - [E. 조립·메타](#e-조립메타)
-      - [`EffectsBootstrap.cs`](#effectsbootstrapcs)
-  - [Chapter 5. 승패 판정 시스템](#chapter-5-승패-판정-시스템)
-    - [`StatSystem.cs`](#statsystemcs)
-    - [`GameRuleSystem.cs`](#gamerulesystemcs)
-  - [RPC 작동 원리와 메커니즘 B 복습](#rpc-작동-원리와-메커니즘-b-복습)
-  - [Chapter 6. 비동기 플레이어 입력 처리](#chapter-6-비동기-플레이어-입력-처리)
-    - [`RemotePlayerInputProvider.cs`](#remoteplayerinputprovidercs)
-    - [`IPlayerInputProvider.cs`](#iplayerinputprovidercs)
-  - [Chapter 7. 서버 권위 상태 동기화](#chapter-7-서버-권위-상태-동기화)
-    - [`NetworkDTOs.cs`](#networkdtoscs)
-    - [`GameNetworkManager.cs`](#gamenetworkmanagercs)
-    - [`GamePlayer.cs`](#gameplayercs)
-    - [`NetworkGameController.cs`](#networkgamecontrollercs)
-    - [`ClientCardManager.cs`](#clientcardmanagercs)
-- [Ⅳ. 회고 및 마무리 (Conclusion)](#ⅳ-회고-및-마무리-conclusion)
-  - [로드맵](#로드맵)
-    - [RoadMap01 멀티플레이 로비](#roadmap01-멀티플레이-로비)
-    - [RoadMap02 코드 리팩토링과 부드러운 카드 애니메이션](#roadmap02-코드-리팩토링과-부드러운-카드-애니메이션)
-  - [출시를 통해 배운 점과 아쉬운 점](#출시를-통해-배운-점과-아쉬운-점)
-  - [가장 힘들었던 구현 부](#가장-힘들었던-구현-부)
-  - [가장 재미있었던 구현 부](#가장-재미있었던-구현-부)
-  - [참고자료](#참고자료)
+      - [B. 명령들 — 단순부터 복잡](#b-명령들--단순부터-복잡)
+        - [`DrawCommand.cs`](#drawcommandcs)
+        - [`RevealCommand.cs`](#revealcommandcs)
+        - [`TargetedRemovalCommand.cs`](#targetedremovalcommandcs)
+        - [`TradeCommand.cs`](#tradecommandcs)
+        - [`StarveCommand.cs`](#starvecommandcs)
+        - [`GetCommand.cs`](#getcommandcs)
+        - [`SetNextDrawCommand.cs`](#setnextdrawcommandcs)
+        - [`AddTurnCycleCommand.cs`](#addturncyclecommandcs)
+      - [C. 흐름 제어 — 다른 명령을 조작하는 메타 명령](#c-흐름-제어--다른-명령을-조작하는-메타-명령)
+        - [`LogCommand.cs`](#logcommandcs)
+        - [`SetVarCommand.cs`](#setvarcommandcs)
+        - [`IfCommand.cs`](#ifcommandcs)
+      - [D. 조건들](#d-조건들)
+        - [`CompareCondition.cs`](#compareconditioncs)
+      - [E. 조립·메타](#e-조립메타)
+        - [`EffectsBootstrap.cs`](#effectsbootstrapcs)
+    - [Chapter 5. 승패 판정 시스템](#chapter-5-승패-판정-시스템)
+        - [`StatSystem.cs`](#statsystemcs)
+        - [`GameRuleSystem.cs`](#gamerulesystemcs)
+      - [RPC 작동 원리와 메커니즘 B 복습](#rpc-작동-원리와-메커니즘-b-복습)
+    - [Chapter 6. 비동기 플레이어 입력 처리](#chapter-6-비동기-플레이어-입력-처리)
+        - [`RemotePlayerInputProvider.cs`](#remoteplayerinputprovidercs)
+        - [`IPlayerInputProvider.cs`](#iplayerinputprovidercs)
+    - [Chapter 7. 서버 권위 상태 동기화](#chapter-7-서버-권위-상태-동기화)
+        - [`NetworkDTOs.cs`](#networkdtoscs)
+        - [`GameNetworkManager.cs`](#gamenetworkmanagercs)
+        - [`GamePlayer.cs`](#gameplayercs)
+        - [`NetworkGameController.cs`](#networkgamecontrollercs)
+        - [`ClientCardManager.cs`](#clientcardmanagercs)
+  - [Ⅳ. 회고 및 마무리 (Conclusion)](#ⅳ-회고-및-마무리-conclusion)
+    - [로드맵](#로드맵)
+      - [RoadMap01 멀티플레이 로비](#roadmap01-멀티플레이-로비)
+      - [RoadMap02 코드 리팩토링과 부드러운 카드 애니메이션](#roadmap02-코드-리팩토링과-부드러운-카드-애니메이션)
+    - [출시를 통해 배운 점과 아쉬운 점](#출시를-통해-배운-점과-아쉬운-점)
+    - [가장 힘들었던 구현 부](#가장-힘들었던-구현-부)
+    - [가장 재미있었던 구현 부](#가장-재미있었던-구현-부)
+    - [참고자료](#참고자료)
 
 ## Ⅱ. 시스템 아키텍처 (Architecture)
 
